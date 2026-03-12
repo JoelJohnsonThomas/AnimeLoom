@@ -1,0 +1,23 @@
+SCENE: Character introduction
+CHAR: Yuki
+A young girl with long blue hair stands in a field of flowers
+
+SCENE: Walking scene
+CHAR: Yuki
+POSE: walking_pose.mp4
+Yuki walks through the forest, looking around curiously
+
+SCENE: Conversation
+CHAR: Yuki
+CHAR: Kenji
+Yuki meets Kenji by the river. They talk about their day.
+
+SCENE: Battle preparation
+CHAR: Kenji
+POSE: fighting_stance.mp4
+Kenji draws his sword and takes a fighting stance
+
+SCENE: Sunset ending
+CHAR: Yuki
+CHAR: Kenji
+Both characters watch the sunset from a hilltop
