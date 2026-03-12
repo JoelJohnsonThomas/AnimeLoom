@@ -1,6 +1,7 @@
 """
 LoRA Trainer - Trains LoRA adapters for character consistency.
 Uses PEFT + Diffusers for efficient fine-tuning (rank 16-32, fp16).
+Supports both SD 1.5/2.1 and SDXL-based models (e.g. Animagine XL 3.1).
 """
 
 import os
@@ -12,13 +13,19 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 
+_SDXL_KEYWORDS = ["xl", "animagine"]
+
+
+def _is_sdxl(model_id: str) -> bool:
+    lower = model_id.lower()
+    return any(kw in lower for kw in _SDXL_KEYWORDS)
+
 
 class CharacterDataset(Dataset):
     """Dataset for character LoRA training from reference images."""
 
-    def __init__(self, images: List[str], tokenizer, size: int = 512, repeats: int = 10):
+    def __init__(self, images: List[str], size: int = 1024, repeats: int = 10):
         self.images = [p for p in images if os.path.exists(p)]
-        self.tokenizer = tokenizer
         self.size = size
         self.repeats = repeats
 
@@ -34,19 +41,9 @@ class CharacterDataset(Dataset):
         pixel_values = np.array(image, dtype=np.float32) / 127.5 - 1.0
         pixel_values = torch.from_numpy(pixel_values).permute(2, 0, 1)
 
-        prompt = "a character portrait, anime style"
-        tokens = self.tokenizer(
-            prompt,
-            padding="max_length",
-            max_length=77,
-            truncation=True,
-            return_tensors="pt",
-        )
-
         return {
             "pixel_values": pixel_values,
-            "input_ids": tokens.input_ids.squeeze(0),
-            "attention_mask": tokens.attention_mask.squeeze(0),
+            "caption": "a character portrait, anime style",
         }
 
 
@@ -93,7 +90,7 @@ class LoRATrainer:
         Returns:
             Path to saved LoRA weights (.safetensors).
         """
-        from diffusers import StableDiffusionPipeline, DDPMScheduler
+        from diffusers import DDPMScheduler
         from peft import LoraConfig, get_peft_model
 
         rank = rank or self.rank
@@ -104,16 +101,31 @@ class LoRATrainer:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # ---- Load base model ------------------------------------------------
-        model_id = "stabilityai/stable-diffusion-2-1"
-        pipe = StableDiffusionPipeline.from_pretrained(
-            model_id, torch_dtype=torch.float16
-        )
+        model_id = "cagliostrolab/animagine-xl-3.1"
+        sdxl = _is_sdxl(model_id)
+
+        if sdxl:
+            from diffusers import StableDiffusionXLPipeline
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                model_id, torch_dtype=torch.float16, variant="fp16",
+            )
+        else:
+            from diffusers import StableDiffusionPipeline
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_id, torch_dtype=torch.float16
+            )
+
         pipe.to(device)
 
         # Freeze everything
         pipe.vae.requires_grad_(False)
-        pipe.text_encoder.requires_grad_(False)
         pipe.unet.requires_grad_(False)
+
+        if sdxl:
+            pipe.text_encoder.requires_grad_(False)
+            pipe.text_encoder_2.requires_grad_(False)
+        else:
+            pipe.text_encoder.requires_grad_(False)
 
         # ---- Attach LoRA via PEFT -------------------------------------------
         lora_config = LoraConfig(
@@ -127,7 +139,8 @@ class LoRATrainer:
         unet.print_trainable_parameters()
 
         # ---- Dataset & DataLoader -------------------------------------------
-        dataset = CharacterDataset(character_images, pipe.tokenizer)
+        resolution = 1024 if sdxl else 512
+        dataset = CharacterDataset(character_images, size=resolution)
         dataloader = DataLoader(
             dataset,
             batch_size=self.train_batch_size,
@@ -149,6 +162,37 @@ class LoRATrainer:
             num_training_steps=max_steps,
         )
 
+        # ---- Text encoding helpers ------------------------------------------
+        def encode_text(caps_batch):
+            if sdxl:
+                tok1 = pipe.tokenizer(
+                    caps_batch, padding="max_length", max_length=77,
+                    truncation=True, return_tensors="pt",
+                )
+                tok2 = pipe.tokenizer_2(
+                    caps_batch, padding="max_length", max_length=77,
+                    truncation=True, return_tensors="pt",
+                )
+                with torch.no_grad():
+                    enc1 = pipe.text_encoder(tok1.input_ids.to(device))[0]
+                    enc2_out = pipe.text_encoder_2(tok2.input_ids.to(device))
+                    enc2 = enc2_out[0]
+                    pooled = enc2_out[1]
+                hidden = torch.cat([enc1, enc2], dim=-1)
+                time_ids = torch.tensor(
+                    [[resolution, resolution, 0, 0, resolution, resolution]],
+                    dtype=torch.float16, device=device,
+                ).repeat(len(caps_batch), 1)
+                return hidden, {"text_embeds": pooled, "time_ids": time_ids}
+            else:
+                tok = pipe.tokenizer(
+                    caps_batch, padding="max_length", max_length=77,
+                    truncation=True, return_tensors="pt",
+                )
+                with torch.no_grad():
+                    hidden = pipe.text_encoder(tok.input_ids.to(device))[0]
+                return hidden, {}
+
         # ---- Training loop --------------------------------------------------
         global_step = 0
         unet.train()
@@ -162,11 +206,14 @@ class LoRATrainer:
                     break
 
                 pixel_values = batch["pixel_values"].to(device, dtype=torch.float16)
-                input_ids = batch["input_ids"].to(device)
+                caps = batch["caption"]
 
                 # Encode images -> latents
                 latents = pipe.vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * pipe.vae.config.scaling_factor
+
+                # Encode text
+                encoder_hidden, added_cond = encode_text(caps)
 
                 # Sample noise & timesteps
                 noise = torch.randn_like(latents)
@@ -179,11 +226,15 @@ class LoRATrainer:
 
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Get text embeddings
-                encoder_hidden = pipe.text_encoder(input_ids)[0]
-
                 # Predict & loss
-                noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states=encoder_hidden).sample
+                unet_kwargs = dict(
+                    sample=noisy_latents, timestep=timesteps,
+                    encoder_hidden_states=encoder_hidden,
+                )
+                if added_cond:
+                    unet_kwargs["added_cond_kwargs"] = added_cond
+
+                noise_pred = unet(**unet_kwargs).sample
                 loss = torch.nn.functional.mse_loss(noise_pred, noise)
 
                 loss.backward()

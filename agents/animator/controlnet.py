@@ -87,7 +87,7 @@ class PoseConditioner:
                 torch_dtype=torch.float16,
             )
             self._controlnet_pipe = StableDiffusionControlNetPipeline.from_pretrained(
-                "stabilityai/stable-diffusion-2-1",
+                "sd2-community/stable-diffusion-2-1",
                 controlnet=controlnet,
                 torch_dtype=torch.float16,
                 safety_checker=None,

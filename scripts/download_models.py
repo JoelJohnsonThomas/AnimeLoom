@@ -14,18 +14,20 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def download_sd_model():
-    """Download Stable Diffusion 2.1 via diffusers (cached by HF Hub)."""
-    print("Checking Stable Diffusion 2.1...")
+    """Download Animagine XL 3.1 via diffusers (cached by HF Hub)."""
+    print("Checking Animagine XL 3.1...")
     try:
-        from diffusers import StableDiffusionPipeline
+        from diffusers import StableDiffusionXLPipeline
 
-        StableDiffusionPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-2-1",
+        StableDiffusionXLPipeline.from_pretrained(
+            "cagliostrolab/animagine-xl-3.1",
             cache_dir=str(MODELS_DIR),
+            variant="fp16",
+            torch_dtype=__import__("torch").float16,
         )
-        print("  Stable Diffusion 2.1: OK")
+        print("  Animagine XL 3.1: OK")
     except Exception as e:
-        print(f"  SD 2.1 download skipped: {e}")
+        print(f"  Animagine XL 3.1 download skipped: {e}")
 
 
 def download_clip():

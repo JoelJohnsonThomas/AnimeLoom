@@ -1,12 +1,21 @@
 """
 LoRA Manager - Manages loading and unloading of character LoRA adapters.
+Supports both SD 1.5/2.1 and SDXL-based models (e.g. Animagine XL 3.1).
 """
 
+import json
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import torch
+
+_SDXL_KEYWORDS = ["xl", "animagine"]
+
+
+def _is_sdxl(model_id: str) -> bool:
+    lower = model_id.lower()
+    return any(kw in lower for kw in _SDXL_KEYWORDS)
 
 
 class LoRAManager:
@@ -31,24 +40,46 @@ class LoRAManager:
     # Pipeline management
     # ------------------------------------------------------------------
 
-    def load_base_pipeline(self, model_id: str = "stabilityai/stable-diffusion-2-1"):
-        """Load the base Stable Diffusion pipeline."""
+    def load_base_pipeline(self, model_id: str = "cagliostrolab/animagine-xl-3.1"):
+        """Load the base Stable Diffusion pipeline (SD or SDXL)."""
         if self._pipeline is not None:
             return self._pipeline
 
-        from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
+        from diffusers import DPMSolverMultistepScheduler
 
-        self._pipeline = StableDiffusionPipeline.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16,
-            safety_checker=None,
-            requires_safety_checker=False,
-        )
+        if _is_sdxl(model_id):
+            from diffusers import StableDiffusionXLPipeline
+
+            self._pipeline = StableDiffusionXLPipeline.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16,
+                variant="fp16",
+            )
+        else:
+            from diffusers import StableDiffusionPipeline
+
+            self._pipeline = StableDiffusionPipeline.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16,
+                safety_checker=None,
+                requires_safety_checker=False,
+            )
+
         self._pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
             self._pipeline.scheduler.config
         )
         self._pipeline = self._pipeline.to(self._device)
         return self._pipeline
+
+    def load_base_pipeline_for_character(self, character_id: str):
+        """Load the correct pipeline based on a character's training metadata."""
+        meta_path = self.lora_dir / character_id / "metadata.json"
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text())
+            model_id = meta.get("base_model", "cagliostrolab/animagine-xl-3.1")
+        else:
+            model_id = "cagliostrolab/animagine-xl-3.1"
+        return self.load_base_pipeline(model_id)
 
     @property
     def pipeline(self):
@@ -83,7 +114,7 @@ class LoRAManager:
     # Load / unload
     # ------------------------------------------------------------------
 
-    def load_lora(self, lora_path: Path, adapter_name: str = None) -> "StableDiffusionPipeline":
+    def load_lora(self, lora_path: Path, adapter_name: str = None):
         """Load LoRA weights into the pipeline."""
         pipe = self.pipeline
         adapter_name = adapter_name or lora_path.parent.name
