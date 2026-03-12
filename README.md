@@ -96,7 +96,7 @@ animeloom/
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/yourusername/AnimeLoom.git
+git clone https://github.com/JoelJohnsonThomas/AnimeLoom.git
 cd AnimeLoom
 chmod +x setup.sh
 ./setup.sh
