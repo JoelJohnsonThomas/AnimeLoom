@@ -281,10 +281,6 @@ chmod +x cloud/gcp_setup.sh
 - ffmpeg (for video assembly)
 - Redis (optional, for Celery job queue)
 
-## License
-
-MIT
-
 ## Contributing
 
 Contributions welcome! Please open an issue or pull request.
