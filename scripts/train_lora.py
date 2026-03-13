@@ -115,7 +115,7 @@ def train(
         from diffusers import StableDiffusionXLPipeline
 
         pipe = StableDiffusionXLPipeline.from_pretrained(
-            base_model, torch_dtype=torch.float16, variant="fp16",
+            base_model, torch_dtype=torch.float16,
         )
     else:
         from diffusers import StableDiffusionPipeline
