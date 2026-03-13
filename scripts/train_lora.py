@@ -201,9 +201,11 @@ def train(
         )
         with torch.no_grad():
             enc1 = text_encoder(tok1.input_ids.to(device))[0]
-            enc2_out = text_encoder_2(tok2.input_ids.to(device))
-            enc2 = enc2_out[0]
-            pooled = enc2_out[1]
+            enc2_out = text_encoder_2(
+                tok2.input_ids.to(device), output_hidden_states=True,
+            )
+            enc2 = enc2_out.hidden_states[-2]  # penultimate hidden state (3D)
+            pooled = enc2_out.text_embeds       # pooled projection (2D)
 
         hidden = torch.cat([enc1, enc2], dim=-1)
 
