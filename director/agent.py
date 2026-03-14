@@ -55,18 +55,27 @@ class _CharacterAgent:
         """Make sure a LoRA exists for *char_name*; train one if needed."""
         char_data = self.memory.get_character(char_name)
         if char_data is None:
+            print(f"  [ensure_lora] Character '{char_name}' not found in memory bank")
             return None
+
         lora_path = self.memory.get_character_lora_path(char_data["id"])
         if lora_path and lora_path.exists() and lora_path.stat().st_size > 100:
+            print(f"  [ensure_lora] Found LoRA for '{char_name}': {lora_path}")
             return lora_path
-        # PEFT saves as adapter_model.safetensors; check parent dir
-        if lora_path and lora_path.parent.is_dir():
-            adapter_path = lora_path.parent / "adapter_model.safetensors"
-            if adapter_path.exists() and adapter_path.stat().st_size > 100:
-                return adapter_path
+
+        # Also check lora dir directly (in case memory bank path is stale)
+        lora_dir = Path(self.warehouse) / "lora" / char_data["id"]
+        for fname in ["adapter_model.safetensors", "pytorch_lora_weights.safetensors"]:
+            candidate = lora_dir / fname
+            if candidate.exists() and candidate.stat().st_size > 100:
+                print(f"  [ensure_lora] Found LoRA on disk for '{char_name}': {candidate}")
+                return candidate
+
         # Need to train
+        print(f"  [ensure_lora] No LoRA found for '{char_name}', training...")
         images = char_data.get("multi_views", [])
         if not images:
+            print(f"  [ensure_lora] No training images for '{char_name}', skipping")
             return None
         trained = self.trainer.train_character_lora(
             images, char_data["id"], char_data["name"]
