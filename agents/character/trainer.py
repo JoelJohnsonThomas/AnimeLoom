@@ -107,7 +107,7 @@ class LoRATrainer:
         if sdxl:
             from diffusers import StableDiffusionXLPipeline
             pipe = StableDiffusionXLPipeline.from_pretrained(
-                model_id, torch_dtype=torch.float16, variant="fp16",
+                model_id, torch_dtype=torch.float16,
             )
         else:
             from diffusers import StableDiffusionPipeline

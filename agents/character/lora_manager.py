@@ -53,7 +53,6 @@ class LoRAManager:
             self._pipeline = StableDiffusionXLPipeline.from_pretrained(
                 model_id,
                 torch_dtype=torch.float16,
-                variant="fp16",
             )
         else:
             from diffusers import StableDiffusionPipeline

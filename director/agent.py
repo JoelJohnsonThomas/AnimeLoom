@@ -57,8 +57,13 @@ class _CharacterAgent:
         if char_data is None:
             return None
         lora_path = self.memory.get_character_lora_path(char_data["id"])
-        if lora_path and lora_path.stat().st_size > 100:
+        if lora_path and lora_path.exists() and lora_path.stat().st_size > 100:
             return lora_path
+        # PEFT saves as adapter_model.safetensors; check parent dir
+        if lora_path and lora_path.parent.is_dir():
+            adapter_path = lora_path.parent / "adapter_model.safetensors"
+            if adapter_path.exists() and adapter_path.stat().st_size > 100:
+                return adapter_path
         # Need to train
         images = char_data.get("multi_views", [])
         if not images:

@@ -22,7 +22,6 @@ def download_sd_model():
         StableDiffusionXLPipeline.from_pretrained(
             "cagliostrolab/animagine-xl-3.1",
             cache_dir=str(MODELS_DIR),
-            variant="fp16",
             torch_dtype=__import__("torch").float16,
         )
         print("  Animagine XL 3.1: OK")
