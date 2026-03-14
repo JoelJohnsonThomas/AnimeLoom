@@ -112,7 +112,9 @@ class AssetMemoryBank:
             self.db["characters"][char_id]["embedding"] = embedding.tolist()
 
         # Train LoRA placeholder (actual training delegated to trainer.py)
-        lora_path = self._prepare_lora_dir(char_id)
+        # Use name-based dir to match training script output
+        name_key = name.lower().replace(" ", "_")
+        lora_path = self._prepare_lora_dir(name_key)
         self.db["characters"][char_id]["lora_path"] = str(lora_path)
 
         # Register in lora_registry for reverse lookup
@@ -158,10 +160,17 @@ class AssetMemoryBank:
             self.db["characters"][char_id]["shot_count"] += 1
             self.db["characters"][char_id]["last_used"] = datetime.now().isoformat()
 
-    def update_character_lora(self, char_id: str, lora_path: str):
-        """Update the LoRA path for a character after training."""
-        if char_id in self.db["characters"]:
-            self.db["characters"][char_id]["lora_path"] = str(lora_path)
+    def update_character_lora(self, char_id_or_name: str, lora_path: str):
+        """Update the LoRA path for a character (accepts ID or name)."""
+        # Try as direct ID first
+        if char_id_or_name in self.db["characters"]:
+            self.db["characters"][char_id_or_name]["lora_path"] = str(lora_path)
+            self.save_checkpoint()
+            return
+        # Try as name lookup
+        char = self.get_character(char_id_or_name)
+        if char and char["id"] in self.db["characters"]:
+            self.db["characters"][char["id"]]["lora_path"] = str(lora_path)
             self.save_checkpoint()
 
     def update_character_embedding(self, char_id: str, embedding: np.ndarray):
@@ -186,17 +195,31 @@ class AssetMemoryBank:
 
     def get_character_lora_path(self, char_id: str) -> Optional[Path]:
         """Get path to character's LoRA weights (only if file exists).
-        Checks both diffusers and PEFT weight filenames."""
-        if char_id in self.db["characters"]:
-            lora_path = self.db["characters"][char_id].get("lora_path")
-            if lora_path:
-                p = Path(lora_path)
-                if p.exists():
-                    return p
-                # PEFT saves as adapter_model.safetensors
-                adapter = p.parent / "adapter_model.safetensors"
-                if adapter.exists():
-                    return adapter
+        Checks both diffusers and PEFT weight filenames, and falls back
+        to name-based directory lookup."""
+        if char_id not in self.db["characters"]:
+            return None
+
+        char_data = self.db["characters"][char_id]
+        lora_path = char_data.get("lora_path")
+
+        # Check stored path and its PEFT variant
+        if lora_path:
+            p = Path(lora_path)
+            if p.exists() and p.stat().st_size > 100:
+                return p
+            adapter = p.parent / "adapter_model.safetensors"
+            if adapter.exists() and adapter.stat().st_size > 100:
+                return adapter
+
+        # Fallback: check by character name (training script saves here)
+        name_key = char_data["name"].lower().replace(" ", "_")
+        name_dir = self.lora_dir / name_key
+        for fname in ["adapter_model.safetensors", "pytorch_lora_weights.safetensors"]:
+            candidate = name_dir / fname
+            if candidate.exists() and candidate.stat().st_size > 100:
+                return candidate
+
         return None
 
     def delete_character(self, char_id: str) -> bool:

@@ -55,27 +55,38 @@ class _CharacterAgent:
         """Make sure a LoRA exists for *char_name*; train one if needed."""
         char_data = self.memory.get_character(char_name)
         if char_data is None:
-            print(f"  [ensure_lora] Character '{char_name}' not found in memory bank")
+            print(f"  [ensure_lora] Character '{char_name}' not found in memory bank", flush=True)
             return None
 
         lora_path = self.memory.get_character_lora_path(char_data["id"])
         if lora_path and lora_path.exists() and lora_path.stat().st_size > 100:
-            print(f"  [ensure_lora] Found LoRA for '{char_name}': {lora_path}")
+            print(f"  [ensure_lora] Found LoRA for '{char_name}': {lora_path}", flush=True)
             return lora_path
 
-        # Also check lora dir directly (in case memory bank path is stale)
+        # Check lora dir by hash-based ID
         lora_dir = Path(self.warehouse) / "lora" / char_data["id"]
         for fname in ["adapter_model.safetensors", "pytorch_lora_weights.safetensors"]:
             candidate = lora_dir / fname
             if candidate.exists() and candidate.stat().st_size > 100:
-                print(f"  [ensure_lora] Found LoRA on disk for '{char_name}': {candidate}")
+                print(f"  [ensure_lora] Found LoRA on disk (by ID) for '{char_name}': {candidate}", flush=True)
+                self.memory.update_character_lora(char_data["id"], str(candidate))
+                return candidate
+
+        # Check lora dir by character name (training script saves here)
+        name_key = char_data["name"].lower().replace(" ", "_")
+        lora_dir_by_name = Path(self.warehouse) / "lora" / name_key
+        for fname in ["adapter_model.safetensors", "pytorch_lora_weights.safetensors"]:
+            candidate = lora_dir_by_name / fname
+            if candidate.exists() and candidate.stat().st_size > 100:
+                print(f"  [ensure_lora] Found LoRA on disk (by name) for '{char_name}': {candidate}", flush=True)
+                self.memory.update_character_lora(char_data["id"], str(candidate))
                 return candidate
 
         # Need to train
-        print(f"  [ensure_lora] No LoRA found for '{char_name}', training...")
+        print(f"  [ensure_lora] No LoRA found for '{char_name}', training...", flush=True)
         images = char_data.get("multi_views", [])
         if not images:
-            print(f"  [ensure_lora] No training images for '{char_name}', skipping")
+            print(f"  [ensure_lora] No training images for '{char_name}', skipping", flush=True)
             return None
         trained = self.trainer.train_character_lora(
             images, char_data["id"], char_data["name"]
@@ -332,9 +343,12 @@ class DirectorAgent:
     def _execute_shot(self, shot: Dict, shot_index: int) -> Dict:
         character_loras: Dict[str, str] = {}
         for char_name in shot["characters"]:
-            char_data = self.asset_memory.get_character(char_name)
-            if char_data and char_data.get("lora_path"):
-                character_loras[char_name] = char_data["lora_path"]
+            # Use the resolved LoRA path (ensure_lora already ran)
+            lora_path = self.asset_memory.get_character_lora_path(
+                self.asset_memory.get_character(char_name).get("id", "")
+            ) if self.asset_memory.get_character(char_name) else None
+            if lora_path:
+                character_loras[char_name] = str(lora_path)
 
         result = self.agents["animator"].generate_shot(
             description=shot["description"],
@@ -364,9 +378,14 @@ class DirectorAgent:
             result = self.agents["animator"].generate_shot(
                 description=shot["description"],
                 characters={
-                    c: self.asset_memory.get_character(c)["lora_path"]
+                    c: str(self.asset_memory.get_character_lora_path(
+                        self.asset_memory.get_character(c)["id"]
+                    ))
                     for c in shot["characters"]
                     if self.asset_memory.get_character(c)
+                    and self.asset_memory.get_character_lora_path(
+                        self.asset_memory.get_character(c)["id"]
+                    )
                 },
                 pose_ref=shot.get("pose_ref"),
                 shot_index=shot_index,
