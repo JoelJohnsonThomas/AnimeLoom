@@ -68,6 +68,13 @@ class LoRAManager:
             self._pipeline.scheduler.config
         )
         self._pipeline = self._pipeline.to(self._device)
+
+        # VRAM optimizations for T4/P100 (15-16GB)
+        try:
+            self._pipeline.vae.enable_slicing()
+            self._pipeline.vae.enable_tiling()
+        except Exception:
+            pass
         return self._pipeline
 
     def load_base_pipeline_for_character(self, character_id: str):
@@ -94,18 +101,22 @@ class LoRAManager:
         """
         Find LoRA weights for a character by ID.
         Searches the warehouse/lora directory tree.
+        Checks both PEFT format (adapter_model.safetensors) and diffusers format.
         """
-        direct = self.lora_dir / character_id / "pytorch_lora_weights.safetensors"
-        if direct.exists():
-            return direct
+        char_dir = self.lora_dir / character_id
+        for fname in ["adapter_model.safetensors", "pytorch_lora_weights.safetensors"]:
+            candidate = char_dir / fname
+            if candidate.exists():
+                return candidate
 
         # Broader search
         for subdir in self.lora_dir.iterdir():
-            if not subdir.is_dir():
+            if not subdir.is_dir() or character_id not in subdir.name:
                 continue
-            candidate = subdir / "pytorch_lora_weights.safetensors"
-            if candidate.exists() and character_id in subdir.name:
-                return candidate
+            for fname in ["adapter_model.safetensors", "pytorch_lora_weights.safetensors"]:
+                candidate = subdir / fname
+                if candidate.exists():
+                    return candidate
 
         return None
 

@@ -185,11 +185,18 @@ class AssetMemoryBank:
         ]
 
     def get_character_lora_path(self, char_id: str) -> Optional[Path]:
-        """Get path to character's LoRA weights (only if file exists)."""
+        """Get path to character's LoRA weights (only if file exists).
+        Checks both diffusers and PEFT weight filenames."""
         if char_id in self.db["characters"]:
             lora_path = self.db["characters"][char_id].get("lora_path")
-            if lora_path and Path(lora_path).exists():
-                return Path(lora_path)
+            if lora_path:
+                p = Path(lora_path)
+                if p.exists():
+                    return p
+                # PEFT saves as adapter_model.safetensors
+                adapter = p.parent / "adapter_model.safetensors"
+                if adapter.exists():
+                    return adapter
         return None
 
     def delete_character(self, char_id: str) -> bool:
