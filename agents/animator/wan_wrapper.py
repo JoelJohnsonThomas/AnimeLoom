@@ -35,32 +35,48 @@ class WanAnimator:
     # Model loading
     # ------------------------------------------------------------------
 
+    # Wan2.2 model variants (smallest first for T4 compatibility)
+    _WAN_MODELS = [
+        ("Wan-AI/Wan2.2-TI2V-5B", "wan2.2-ti2v-5b"),     # 5B — fits on T4
+        ("Wan-AI/Wan2.2-T2V-A14B", "wan2.2-t2v-a14b"),    # 14B — needs A100
+    ]
+
     def _load_pipeline(self):
-        """Lazy-load the Wan2.2-Animate pipeline."""
+        """Lazy-load the Wan2.2 pipeline (prefers 5B for T4 compatibility)."""
         if self._pipeline is not None:
             return
 
         try:
             from diffusers import DiffusionPipeline
 
-            model_path = self.warehouse / "models" / "wan2.2-animate"
-            if model_path.exists():
-                self._pipeline = DiffusionPipeline.from_pretrained(
-                    str(model_path),
-                    torch_dtype=torch.float16,
-                )
-                self._pipeline.to(self._device)
-                print("Wan2.2-Animate loaded from local cache")
-            else:
-                # Try HuggingFace hub
-                self._pipeline = DiffusionPipeline.from_pretrained(
-                    "Wan-AI/Wan2.2-T2V-14B",
-                    torch_dtype=torch.float16,
-                )
-                self._pipeline.to(self._device)
-                print("Wan2.2-Animate loaded from HuggingFace")
+            # Check local cache first
+            for _, local_name in self._WAN_MODELS:
+                model_path = self.warehouse / "models" / local_name
+                if model_path.exists():
+                    self._pipeline = DiffusionPipeline.from_pretrained(
+                        str(model_path),
+                        torch_dtype=torch.float16,
+                    )
+                    self._pipeline.to(self._device)
+                    print(f"Wan2.2 loaded from local cache: {local_name}")
+                    return
+
+            # Try HuggingFace hub (smallest model first)
+            for repo_id, _ in self._WAN_MODELS:
+                try:
+                    self._pipeline = DiffusionPipeline.from_pretrained(
+                        repo_id,
+                        torch_dtype=torch.float16,
+                    )
+                    self._pipeline.to(self._device)
+                    print(f"Wan2.2 loaded from HuggingFace: {repo_id}")
+                    return
+                except Exception:
+                    continue
+
+            print("No Wan2.2 model available, falling back to placeholder generation")
         except Exception as e:
-            print(f"Wan2.2-Animate not available: {e}")
+            print(f"Wan2.2 not available: {e}")
             print("Falling back to placeholder generation")
 
     # ------------------------------------------------------------------
