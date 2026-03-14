@@ -1,23 +1,22 @@
-SCENE: Character introduction
-CHAR: Yuki
-A young girl with long blue hair stands in a field of flowers
+SCENE: Library encounter
+CHAR: yuki_nagato
+yuki_nagato, 1girl, purple hair, sitting in a quiet library reading a book, soft lighting, anime, detailed, masterpiece
 
-SCENE: Walking scene
-CHAR: Yuki
-POSE: walking_pose.mp4
-Yuki walks through the forest, looking around curiously
+SCENE: Rooftop meeting
+CHAR: denji
+denji, 1boy, blonde hair, standing on a school rooftop looking at the city skyline, sunset, anime, detailed, masterpiece
 
-SCENE: Conversation
-CHAR: Yuki
-CHAR: Kenji
-Yuki meets Kenji by the river. They talk about their day.
+SCENE: Cherry blossom park
+CHAR: sakura_haruno
+sakura_haruno, 1girl, pink hair, green eyes, walking through a park with cherry blossoms falling, spring, anime, detailed, masterpiece
 
-SCENE: Battle preparation
-CHAR: Kenji
-POSE: fighting_stance.mp4
-Kenji draws his sword and takes a fighting stance
+SCENE: Unlikely alliance
+CHAR: yuki_nagato
+CHAR: denji
+yuki_nagato and denji standing together in a dark alley, serious expressions, rain, neon lights, anime, detailed, masterpiece
 
-SCENE: Sunset ending
-CHAR: Yuki
-CHAR: Kenji
-Both characters watch the sunset from a hilltop
+SCENE: Final stand
+CHAR: yuki_nagato
+CHAR: denji
+CHAR: sakura_haruno
+All three characters standing on a hilltop at sunset, wind blowing, epic wide shot, anime, detailed, masterpiece
