@@ -29,6 +29,7 @@ class WanAnimator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self._pipeline = None
+        self._load_failed = False
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # ------------------------------------------------------------------
@@ -43,7 +44,7 @@ class WanAnimator:
 
     def _load_pipeline(self):
         """Lazy-load the Wan2.2 pipeline (prefers 5B for T4 compatibility)."""
-        if self._pipeline is not None:
+        if self._pipeline is not None or self._load_failed:
             return
 
         try:
@@ -75,9 +76,11 @@ class WanAnimator:
                     continue
 
             print("No Wan2.2 model available, falling back to placeholder generation")
+            self._load_failed = True
         except Exception as e:
             print(f"Wan2.2 not available: {e}")
             print("Falling back to placeholder generation")
+            self._load_failed = True
 
     # ------------------------------------------------------------------
     # Core generation
