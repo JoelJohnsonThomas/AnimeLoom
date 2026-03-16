@@ -267,6 +267,13 @@ class WanAnimator:
 
             pipe = self._sdxl_pipe
 
+            # Unwrap any previous LoRA adapter before loading a new one
+            while hasattr(pipe.unet, "base_model"):
+                try:
+                    pipe.unet = pipe.unet.base_model.model
+                except Exception:
+                    break
+
             # Load the first character LoRA via PEFT
             if character_loras:
                 for char_name, lora_path in character_loras.items():

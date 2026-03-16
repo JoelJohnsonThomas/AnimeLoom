@@ -206,8 +206,8 @@ class DirectorAgent:
     """
 
     CHECKPOINT_INTERVAL = 300  # seconds (5 min)
-    QUALITY_THRESHOLD = 0.85
-    MAX_REGEN_ATTEMPTS = 3
+    QUALITY_THRESHOLD = 0.65  # relaxed for SDXL keyframe fallback mode
+    MAX_REGEN_ATTEMPTS = 1
 
     def __init__(self, warehouse_path: str = None):
         self.warehouse = warehouse_path or os.getenv("AI_CACHE_ROOT", "./warehouse")
