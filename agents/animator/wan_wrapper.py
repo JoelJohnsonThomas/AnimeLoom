@@ -29,6 +29,7 @@ class WanAnimator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self._pipeline = None
+        self._sdxl_pipe = None
         self._load_failed = False
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -151,15 +152,20 @@ class WanAnimator:
             except Exception as e:
                 print(f"  Wan2.2 generation error: {e}")
 
-        # Placeholder: generate a dummy video
-        self._generate_placeholder_video(str(output_path), description, num_frames)
+        # Fallback: generate keyframe images with SDXL + LoRA, assemble to video
+        sdxl_result = self._generate_sdxl_keyframes(
+            str(output_path), description, character_loras, num_frames
+        )
+        status = "sdxl_keyframes" if sdxl_result else "placeholder"
+        if not sdxl_result:
+            self._generate_placeholder_video(str(output_path), description, num_frames)
 
         return {
             "video_path": str(output_path),
             "shot_index": shot_index,
             "prompt": description,
             "num_frames": num_frames,
-            "status": "placeholder",
+            "status": status,
         }
 
     # ------------------------------------------------------------------
@@ -226,6 +232,99 @@ class WanAnimator:
             character_loras=loras,
             shot_index=0,
         )
+
+    # ------------------------------------------------------------------
+    # SDXL keyframe fallback (for T4 / when Wan2.2 unavailable)
+    # ------------------------------------------------------------------
+
+    def _generate_sdxl_keyframes(
+        self,
+        output_path: str,
+        description: str,
+        character_loras: Optional[Dict[str, str]] = None,
+        num_frames: int = 16,
+    ) -> bool:
+        """Generate keyframe images with SDXL + LoRA, assemble into video."""
+        try:
+            import gc
+            from diffusers import StableDiffusionXLPipeline
+            from peft import PeftModel
+
+            model_id = "cagliostrolab/animagine-xl-3.1"
+            cache_dir = str(self.warehouse / "models")
+
+            # Cache the SDXL pipeline across shots
+            if self._sdxl_pipe is None:
+                self._sdxl_pipe = StableDiffusionXLPipeline.from_pretrained(
+                    model_id,
+                    torch_dtype=torch.float16,
+                    cache_dir=cache_dir,
+                )
+                self._sdxl_pipe.to(self._device)
+                self._sdxl_pipe.vae.enable_slicing()
+                self._sdxl_pipe.vae.enable_tiling()
+                print("  SDXL pipeline loaded (animagine-xl-3.1)")
+
+            pipe = self._sdxl_pipe
+
+            # Load the first character LoRA via PEFT
+            if character_loras:
+                for char_name, lora_path in character_loras.items():
+                    lora_dir = str(Path(lora_path).parent)
+                    if Path(lora_path).exists():
+                        try:
+                            pipe.unet = PeftModel.from_pretrained(
+                                pipe.unet, lora_dir
+                            )
+                            print(f"  SDXL LoRA loaded for {char_name}")
+                            break  # one LoRA at a time for VRAM
+                        except Exception as e:
+                            print(f"  SDXL LoRA load failed for {char_name}: {e}")
+
+            # Generate keyframe images (fewer frames to save VRAM)
+            num_keyframes = min(num_frames, 4)
+            frames = []
+            for i in range(num_keyframes):
+                result = pipe(
+                    prompt=description,
+                    negative_prompt="low quality, bad anatomy, worst quality, blurry",
+                    width=768,
+                    height=768,
+                    num_inference_steps=25,
+                    guidance_scale=7.0,
+                    generator=torch.Generator(self._device).manual_seed(42 + i),
+                )
+                frames.append(result.images[0])
+                print(f"  Keyframe {i + 1}/{num_keyframes} generated")
+
+            # Duplicate keyframes to fill num_frames
+            while len(frames) < num_frames:
+                frames.extend(frames[:num_frames - len(frames)])
+
+            # Assemble to video
+            self._frames_to_video(frames, output_path, fps=2)
+
+            # Unload LoRA adapter to reset for next shot
+            if hasattr(pipe.unet, "disable_adapter_layers"):
+                try:
+                    pipe.unet = pipe.unet.base_model.model
+                except Exception:
+                    pass
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            print(f"  SDXL keyframes assembled: {output_path}")
+            return True
+
+        except Exception as e:
+            print(f"  SDXL keyframe fallback failed: {e}")
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            return False
 
     # ------------------------------------------------------------------
     # Helpers
