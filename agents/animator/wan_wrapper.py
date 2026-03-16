@@ -1,7 +1,10 @@
 """
-Wan2.2-Animate Wrapper - Integrates Alibaba's Wan2.2-Animate model
-for character-consistent video generation with motion imitation and
-role play capabilities.
+Video Generation Wrapper — multi-backend animator.
+
+Priority order:
+  1. Wan2.2 (if available and GPU is large enough)
+  2. SDXL keyframes + LoRA → RIFE / cross-fade interpolation (T4-friendly)
+  3. Placeholder coloured-gradient video (offline / CPU)
 """
 
 import os
@@ -288,9 +291,9 @@ class WanAnimator:
                         except Exception as e:
                             print(f"  SDXL LoRA load failed for {char_name}: {e}")
 
-            # Generate keyframe images (fewer frames to save VRAM)
-            num_keyframes = min(num_frames, 4)
-            frames = []
+            # Generate 8 keyframes with varied seeds for visual diversity
+            num_keyframes = 8
+            keyframes = []
             for i in range(num_keyframes):
                 result = pipe(
                     prompt=description,
@@ -301,15 +304,14 @@ class WanAnimator:
                     guidance_scale=7.0,
                     generator=torch.Generator(self._device).manual_seed(42 + i),
                 )
-                frames.append(result.images[0])
+                keyframes.append(result.images[0])
                 print(f"  Keyframe {i + 1}/{num_keyframes} generated")
 
-            # Duplicate keyframes to fill num_frames
-            while len(frames) < num_frames:
-                frames.extend(frames[:num_frames - len(frames)])
+            # Interpolate between keyframes for smooth transitions
+            frames = self._interpolate_keyframes(keyframes, frames_between=6)
 
-            # Assemble to video
-            self._frames_to_video(frames, output_path, fps=2)
+            # Assemble to video at 12 fps (~5s per shot)
+            self._frames_to_video(frames, output_path, fps=12)
 
             # Unload LoRA adapter to reset for next shot
             if hasattr(pipe.unet, "disable_adapter_layers"):
@@ -332,6 +334,100 @@ class WanAnimator:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return False
+
+    # ------------------------------------------------------------------
+    # Frame interpolation
+    # ------------------------------------------------------------------
+
+    def _interpolate_keyframes(
+        self, keyframes: list, frames_between: int = 6
+    ) -> list:
+        """
+        Interpolate between keyframes using RIFE (if available) or cross-fade.
+
+        Args:
+            keyframes: List of PIL Images (the keyframes).
+            frames_between: Number of intermediate frames between each pair.
+
+        Returns:
+            List of PIL Images with smooth transitions.
+        """
+        if len(keyframes) < 2:
+            return keyframes
+
+        # Try RIFE first, fall back to cross-fade
+        rife_model = self._try_load_rife()
+
+        all_frames = []
+        for i in range(len(keyframes) - 1):
+            all_frames.append(keyframes[i])
+
+            if rife_model is not None:
+                intermediates = self._rife_interpolate(
+                    rife_model, keyframes[i], keyframes[i + 1], frames_between
+                )
+            else:
+                intermediates = self._crossfade_interpolate(
+                    keyframes[i], keyframes[i + 1], frames_between
+                )
+            all_frames.extend(intermediates)
+
+        all_frames.append(keyframes[-1])
+        return all_frames
+
+    def _try_load_rife(self):
+        """Try to load RIFE model. Returns None if unavailable."""
+        try:
+            import sys
+            rife_path = str(self.warehouse / "models" / "Practical-RIFE")
+            if Path(rife_path).exists() and rife_path not in sys.path:
+                sys.path.insert(0, rife_path)
+            from model.RIFE import Model as RIFEModel
+
+            model = RIFEModel()
+            model.load_model(str(Path(rife_path) / "train_log"), -1)
+            model.eval()
+            print("  RIFE model loaded for frame interpolation")
+            return model
+        except Exception:
+            return None
+
+    def _rife_interpolate(self, model, img1, img2, n: int) -> list:
+        """Interpolate between two PIL Images using RIFE."""
+        try:
+            import torchvision.transforms.functional as TF
+
+            t1 = TF.to_tensor(img1).unsqueeze(0).to(self._device)
+            t2 = TF.to_tensor(img2).unsqueeze(0).to(self._device)
+
+            frames = []
+            for i in range(1, n + 1):
+                ratio = i / (n + 1)
+                with torch.no_grad():
+                    mid = model.inference(t1, t2, ratio)
+                mid_img = TF.to_pil_image(mid.squeeze(0).cpu().clamp(0, 1))
+                frames.append(mid_img)
+            return frames
+        except Exception as e:
+            print(f"  RIFE interpolation failed: {e}, using cross-fade")
+            return self._crossfade_interpolate(img1, img2, n)
+
+    def _crossfade_interpolate(self, img1, img2, n: int) -> list:
+        """Cross-fade between two PIL Images (pure numpy, no GPU needed)."""
+        arr1 = np.array(img1).astype(np.float32)
+        arr2 = np.array(img2).astype(np.float32)
+
+        # Ensure same size
+        if arr1.shape != arr2.shape:
+            img2 = img2.resize(img1.size, Image.LANCZOS)
+            arr2 = np.array(img2).astype(np.float32)
+
+        frames = []
+        for i in range(1, n + 1):
+            alpha = i / (n + 1)
+            blended = ((1 - alpha) * arr1 + alpha * arr2).astype(np.uint8)
+            frames.append(Image.fromarray(blended))
+        return frames
 
     # ------------------------------------------------------------------
     # Helpers
