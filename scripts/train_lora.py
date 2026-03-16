@@ -289,12 +289,17 @@ def train(
         )
 
     # Also save diffusers-native format for AnimateDiff compatibility
+    # Strips PEFT prefixes so pipe.load_lora_weights() works directly
     if not sdxl:
         try:
-            from peft import PeftModel
-            lora_state = {
-                k: v for k, v in unet.state_dict().items() if "lora" in k
-            }
+            lora_state = {}
+            for k, v in unet.state_dict().items():
+                if "lora" not in k:
+                    continue
+                # Strip PEFT wrapper prefixes
+                clean_k = k.replace("base_model.model.", "")
+                clean_k = clean_k.replace(".default.", ".")
+                lora_state[clean_k] = v
             from safetensors.torch import save_file
             save_file(lora_state, str(out_dir / "pytorch_lora_weights.safetensors"))
             print(f"  Saved diffusers-native LoRA weights for AnimateDiff")

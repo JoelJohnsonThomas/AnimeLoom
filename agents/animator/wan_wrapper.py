@@ -257,8 +257,8 @@ class WanAnimator:
 
     # SD 1.5 anime base models (tried in order)
     _SD15_MODELS = [
+        "Linaqruf/anything-v3-1",
         "Lykon/dreamshaper-8",
-        "stablediffusionapi/anything-v5",
         "runwayml/stable-diffusion-v1-5",
     ]
 
