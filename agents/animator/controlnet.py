@@ -87,7 +87,7 @@ class PoseConditioner:
                 torch_dtype=torch.float16,
             )
             self._controlnet_pipe = StableDiffusionControlNetPipeline.from_pretrained(
-                "gsdf/Counterfeit-V3.0",
+                "Lykon/dreamshaper-8",
                 controlnet=controlnet,
                 torch_dtype=torch.float16,
                 safety_checker=None,

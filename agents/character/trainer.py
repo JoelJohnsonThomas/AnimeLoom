@@ -88,7 +88,7 @@ class LoRATrainer:
             rank: LoRA rank override (default 32).
             max_steps: Training step override.
             base_model: Base model ID (default: animagine-xl-3.1 for SDXL,
-                        use "gsdf/Counterfeit-V3.0" for SD 1.5 AnimateDiff).
+                        use "Lykon/dreamshaper-8" for SD 1.5 AnimateDiff).
 
         Returns:
             Path to saved LoRA weights (.safetensors).

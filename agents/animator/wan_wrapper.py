@@ -257,9 +257,9 @@ class WanAnimator:
 
     # SD 1.5 anime base models (tried in order)
     _SD15_MODELS = [
-        "gsdf/Counterfeit-V3.0",
-        "stablediffusionapi/anything-v5",
         "Lykon/dreamshaper-8",
+        "stablediffusionapi/anything-v5",
+        "runwayml/stable-diffusion-v1-5",
     ]
 
     def _load_animatediff_pipeline(self):
