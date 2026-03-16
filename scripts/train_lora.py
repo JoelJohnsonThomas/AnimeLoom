@@ -272,7 +272,12 @@ def train(
     # ----------------------------------------------------------------
     # Save
     # ----------------------------------------------------------------
-    out_dir = WAREHOUSE / "lora" / character_name.lower().replace(" ", "_")
+    char_slug = character_name.lower().replace(" ", "_")
+    # SD 1.5 LoRAs go in a separate _sd15 directory
+    if sdxl:
+        out_dir = WAREHOUSE / "lora" / char_slug
+    else:
+        out_dir = WAREHOUSE / "lora" / f"{char_slug}_sd15"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -282,6 +287,19 @@ def train(
             {k: v for k, v in unet.state_dict().items() if "lora" in k},
             str(out_dir / "pytorch_lora_weights.safetensors"),
         )
+
+    # Also save diffusers-native format for AnimateDiff compatibility
+    if not sdxl:
+        try:
+            from peft import PeftModel
+            lora_state = {
+                k: v for k, v in unet.state_dict().items() if "lora" in k
+            }
+            from safetensors.torch import save_file
+            save_file(lora_state, str(out_dir / "pytorch_lora_weights.safetensors"))
+            print(f"  Saved diffusers-native LoRA weights for AnimateDiff")
+        except Exception as e:
+            print(f"  Could not save diffusers-native weights: {e}")
 
     # Metadata
     meta = {
@@ -327,6 +345,12 @@ def main():
         print("Provide --images or --tagged")
         sys.exit(1)
 
+    # Auto-adjust resolution for SD 1.5 vs SDXL
+    resolution = args.resolution
+    if resolution == 1024 and not _is_sdxl(args.base_model):
+        resolution = 512
+        print(f"  Auto-adjusted resolution to {resolution} for SD 1.5 model")
+
     train(
         character_name=args.name,
         image_dir=image_dir,
@@ -334,7 +358,7 @@ def main():
         lr=args.lr,
         steps=args.steps,
         batch_size=args.batch_size,
-        resolution=args.resolution,
+        resolution=resolution,
         base_model=args.base_model,
         use_captions=use_captions,
     )

@@ -160,17 +160,30 @@ class AssetMemoryBank:
             self.db["characters"][char_id]["shot_count"] += 1
             self.db["characters"][char_id]["last_used"] = datetime.now().isoformat()
 
-    def update_character_lora(self, char_id_or_name: str, lora_path: str):
-        """Update the LoRA path for a character (accepts ID or name)."""
+    def update_character_lora(
+        self, char_id_or_name: str, lora_path: str, model_type: str = "sdxl"
+    ):
+        """Update the LoRA path for a character (accepts ID or name).
+
+        Args:
+            model_type: "sdxl" or "sd15" — determines which LoRA slot to store.
+        """
+        key = "lora_path" if model_type == "sdxl" else "lora_path_sd15"
+
         # Try as direct ID first
         if char_id_or_name in self.db["characters"]:
-            self.db["characters"][char_id_or_name]["lora_path"] = str(lora_path)
+            self.db["characters"][char_id_or_name][key] = str(lora_path)
+            # Keep backward compat: also set lora_path for sdxl
+            if model_type == "sdxl":
+                self.db["characters"][char_id_or_name]["lora_path"] = str(lora_path)
             self.save_checkpoint()
             return
         # Try as name lookup
         char = self.get_character(char_id_or_name)
         if char and char["id"] in self.db["characters"]:
-            self.db["characters"][char["id"]]["lora_path"] = str(lora_path)
+            self.db["characters"][char["id"]][key] = str(lora_path)
+            if model_type == "sdxl":
+                self.db["characters"][char["id"]]["lora_path"] = str(lora_path)
             self.save_checkpoint()
 
     def update_character_embedding(self, char_id: str, embedding: np.ndarray):
@@ -217,6 +230,33 @@ class AssetMemoryBank:
         name_dir = self.lora_dir / name_key
         for fname in ["adapter_model.safetensors", "pytorch_lora_weights.safetensors"]:
             candidate = name_dir / fname
+            if candidate.exists() and candidate.stat().st_size > 100:
+                return candidate
+
+        return None
+
+    def get_character_lora_path_sd15(self, char_id: str) -> Optional[Path]:
+        """Get path to character's SD 1.5 LoRA weights (for AnimateDiff)."""
+        if char_id not in self.db["characters"]:
+            return None
+
+        char_data = self.db["characters"][char_id]
+
+        # Check stored SD 1.5 path
+        sd15_path = char_data.get("lora_path_sd15")
+        if sd15_path:
+            p = Path(sd15_path)
+            if p.exists() and p.stat().st_size > 100:
+                return p
+            adapter = p.parent / "adapter_model.safetensors"
+            if adapter.exists() and adapter.stat().st_size > 100:
+                return adapter
+
+        # Fallback: check by character name with _sd15 suffix
+        name_key = char_data["name"].lower().replace(" ", "_")
+        sd15_dir = self.lora_dir / f"{name_key}_sd15"
+        for fname in ["pytorch_lora_weights.safetensors", "adapter_model.safetensors"]:
+            candidate = sd15_dir / fname
             if candidate.exists() and candidate.stat().st_size > 100:
                 return candidate
 

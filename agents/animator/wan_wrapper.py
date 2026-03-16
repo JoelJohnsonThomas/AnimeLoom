@@ -33,7 +33,9 @@ class WanAnimator:
 
         self._pipeline = None
         self._sdxl_pipe = None
+        self._animatediff_pipe = None
         self._load_failed = False
+        self._animatediff_load_failed = False
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # ------------------------------------------------------------------
@@ -155,7 +157,20 @@ class WanAnimator:
             except Exception as e:
                 print(f"  Wan2.2 generation error: {e}")
 
-        # Fallback: generate keyframe images with SDXL + LoRA, assemble to video
+        # Fallback 2: AnimateDiff (SD 1.5 + motion module — real animation)
+        animatediff_result = self._generate_animatediff(
+            str(output_path), description, character_loras, num_frames
+        )
+        if animatediff_result:
+            return {
+                "video_path": str(output_path),
+                "shot_index": shot_index,
+                "prompt": description,
+                "num_frames": num_frames,
+                "status": "animatediff",
+            }
+
+        # Fallback 3: SDXL keyframes + interpolation
         sdxl_result = self._generate_sdxl_keyframes(
             str(output_path), description, character_loras, num_frames
         )
@@ -237,6 +252,302 @@ class WanAnimator:
         )
 
     # ------------------------------------------------------------------
+    # AnimateDiff (SD 1.5 + motion module — real animation on T4)
+    # ------------------------------------------------------------------
+
+    # SD 1.5 anime base models (tried in order)
+    _SD15_MODELS = [
+        "gsdf/Counterfeit-V3.0",
+        "stablediffusionapi/anything-v5",
+        "Lykon/dreamshaper-8",
+    ]
+
+    def _load_animatediff_pipeline(self):
+        """Lazy-load AnimateDiff pipeline with SD 1.5 anime model + ControlNet."""
+        if self._animatediff_pipe is not None or self._animatediff_load_failed:
+            return
+
+        try:
+            from diffusers import (
+                AnimateDiffPipeline,
+                MotionAdapter,
+                DDIMScheduler,
+            )
+
+            # Load motion adapter
+            adapter = MotionAdapter.from_pretrained(
+                "guoyww/animatediff-motion-adapter-v1-5-3",
+                torch_dtype=torch.float16,
+                cache_dir=str(self.warehouse / "models"),
+            )
+            print("  AnimateDiff motion adapter loaded")
+
+            # Try SD 1.5 anime base models
+            pipe = None
+            for model_id in self._SD15_MODELS:
+                try:
+                    pipe = AnimateDiffPipeline.from_pretrained(
+                        model_id,
+                        motion_adapter=adapter,
+                        torch_dtype=torch.float16,
+                        cache_dir=str(self.warehouse / "models"),
+                    )
+                    print(f"  AnimateDiff base model loaded: {model_id}")
+                    break
+                except Exception:
+                    continue
+
+            if pipe is None:
+                print("  No SD 1.5 anime model available for AnimateDiff")
+                self._animatediff_load_failed = True
+                return
+
+            pipe.scheduler = DDIMScheduler.from_config(
+                pipe.scheduler.config,
+                beta_schedule="linear",
+                clip_sample=False,
+            )
+            pipe.enable_vae_slicing()
+            pipe.to(self._device)
+
+            self._animatediff_pipe = pipe
+            print("  AnimateDiff pipeline ready")
+
+        except Exception as e:
+            print(f"  AnimateDiff not available: {e}")
+            self._animatediff_load_failed = True
+
+    def _generate_animatediff(
+        self,
+        output_path: str,
+        description: str,
+        character_loras: Optional[Dict[str, str]] = None,
+        num_frames: int = 16,
+    ) -> bool:
+        """Generate animated video clip using AnimateDiff + SD 1.5 + LoRA."""
+        try:
+            import gc
+
+            self._load_animatediff_pipeline()
+            if self._animatediff_pipe is None:
+                return False
+
+            pipe = self._animatediff_pipe
+
+            # Unload any previous LoRA
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
+
+            # Load SD 1.5 LoRA for character (look for sd15 variant)
+            if character_loras:
+                for char_name, lora_path in character_loras.items():
+                    lora_p = Path(lora_path)
+                    # Check for SD 1.5 LoRA alongside the SDXL one
+                    sd15_dir = lora_p.parent.parent / f"{lora_p.parent.name}_sd15"
+                    sd15_weights = sd15_dir / "pytorch_lora_weights.safetensors"
+                    sd15_adapter = sd15_dir / "adapter_model.safetensors"
+
+                    lora_to_load = None
+                    if sd15_weights.exists():
+                        lora_to_load = sd15_dir
+                    elif sd15_adapter.exists():
+                        lora_to_load = sd15_dir
+
+                    if lora_to_load is not None:
+                        try:
+                            pipe.load_lora_weights(
+                                str(lora_to_load),
+                                adapter_name=char_name,
+                            )
+                            print(f"  AnimateDiff LoRA loaded for {char_name}")
+                            break  # one LoRA at a time
+                        except Exception as e:
+                            print(f"  AnimateDiff LoRA failed for {char_name}: {e}")
+                    else:
+                        print(
+                            f"  No SD 1.5 LoRA for {char_name} "
+                            f"(expected at {sd15_dir})"
+                        )
+
+            negative_prompt = (
+                "low quality, bad anatomy, worst quality, blurry, "
+                "deformed, disfigured, static, ugly"
+            )
+
+            # Generate 16-frame animated clip
+            result = pipe(
+                prompt=description,
+                negative_prompt=negative_prompt,
+                num_frames=min(num_frames, 16),
+                width=512,
+                height=768,
+                num_inference_steps=25,
+                guidance_scale=7.5,
+                generator=torch.Generator(self._device).manual_seed(
+                    hash(description) % (2**31)
+                ),
+            )
+
+            frames = result.frames[0]
+            self._frames_to_video(frames, output_path, fps=8)
+            print(f"  AnimateDiff clip generated: {output_path}")
+
+            # Cleanup
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            return True
+
+        except Exception as e:
+            print(f"  AnimateDiff generation failed: {e}")
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            return False
+
+    def generate_long_video(
+        self,
+        description: str,
+        character_loras: Optional[Dict[str, str]] = None,
+        duration_seconds: int = 120,
+        fps: int = 8,
+    ) -> Dict:
+        """
+        Generate a long video by stitching AnimateDiff clips.
+
+        Args:
+            description: Text prompt for the video.
+            character_loras: Character LoRA paths.
+            duration_seconds: Target duration in seconds.
+            fps: Frames per second.
+
+        Returns:
+            Dict with video_path and metadata.
+        """
+        import gc
+
+        frames_per_clip = 16
+        total_frames = duration_seconds * fps
+        num_clips = max(1, total_frames // frames_per_clip)
+        overlap = 4  # overlap frames for smooth transitions
+
+        print(f"  Generating {num_clips} clips for {duration_seconds}s video...")
+
+        all_frames = []
+        for clip_idx in range(num_clips):
+            # Vary seed slightly per clip for visual diversity
+            seed = hash(description) % (2**31) + clip_idx
+
+            self._load_animatediff_pipeline()
+            if self._animatediff_pipe is None:
+                print("  AnimateDiff unavailable, falling back to SDXL keyframes")
+                break
+
+            pipe = self._animatediff_pipe
+
+            # Load LoRA (first character only)
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
+
+            if character_loras:
+                for char_name, lora_path in character_loras.items():
+                    sd15_dir = (
+                        Path(lora_path).parent.parent
+                        / f"{Path(lora_path).parent.name}_sd15"
+                    )
+                    if (sd15_dir / "pytorch_lora_weights.safetensors").exists() or (
+                        sd15_dir / "adapter_model.safetensors"
+                    ).exists():
+                        try:
+                            pipe.load_lora_weights(
+                                str(sd15_dir), adapter_name=char_name
+                            )
+                        except Exception:
+                            pass
+                    break
+
+            try:
+                result = pipe(
+                    prompt=description,
+                    negative_prompt=(
+                        "low quality, bad anatomy, worst quality, blurry, "
+                        "deformed, static, ugly"
+                    ),
+                    num_frames=frames_per_clip,
+                    width=512,
+                    height=768,
+                    num_inference_steps=25,
+                    guidance_scale=7.5,
+                    generator=torch.Generator(self._device).manual_seed(seed),
+                )
+                clip_frames = result.frames[0]
+
+                # Cross-fade overlap with previous clip
+                if all_frames and overlap > 0:
+                    for j in range(min(overlap, len(clip_frames))):
+                        alpha = (j + 1) / (overlap + 1)
+                        prev = np.array(all_frames[-(overlap - j)]).astype(np.float32)
+                        curr = np.array(clip_frames[j]).astype(np.float32)
+                        if prev.shape == curr.shape:
+                            blended = (
+                                ((1 - alpha) * prev + alpha * curr)
+                                .astype(np.uint8)
+                            )
+                            all_frames[-(overlap - j)] = Image.fromarray(blended)
+                    # Add remaining frames (skip overlapped ones)
+                    all_frames.extend(clip_frames[overlap:])
+                else:
+                    all_frames.extend(clip_frames)
+
+                print(
+                    f"  Clip {clip_idx + 1}/{num_clips} generated "
+                    f"({len(all_frames)} frames total)"
+                )
+
+            except Exception as e:
+                print(f"  Clip {clip_idx + 1} failed: {e}")
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        if not all_frames:
+            return {"video_path": "", "status": "failed", "num_frames": 0}
+
+        output_path = (
+            self.output_dir / f"long_video_{int(time.time())}.mp4"
+        )
+        self._frames_to_video(all_frames, str(output_path), fps=fps)
+
+        try:
+            pipe.unload_lora_weights()
+        except Exception:
+            pass
+
+        print(
+            f"  Long video assembled: {output_path} "
+            f"({len(all_frames)} frames, {len(all_frames)/fps:.1f}s)"
+        )
+
+        return {
+            "video_path": str(output_path),
+            "num_frames": len(all_frames),
+            "duration": len(all_frames) / fps,
+            "num_clips": num_clips,
+            "status": "animatediff_long",
+        }
+
+    # ------------------------------------------------------------------
     # SDXL keyframe fallback (for T4 / when Wan2.2 unavailable)
     # ------------------------------------------------------------------
 
@@ -277,8 +588,10 @@ class WanAnimator:
                 except Exception:
                     break
 
-            # Load the first character LoRA via PEFT
-            if character_loras:
+            # Load LoRA: single-character shots use LoRA for identity,
+            # multi-character shots skip LoRA and rely on the prompt
+            is_multi_char = character_loras and len(character_loras) > 1
+            if character_loras and not is_multi_char:
                 for char_name, lora_path in character_loras.items():
                     lora_dir = str(Path(lora_path).parent)
                     if Path(lora_path).exists():
@@ -287,12 +600,16 @@ class WanAnimator:
                                 pipe.unet, lora_dir
                             )
                             print(f"  SDXL LoRA loaded for {char_name}")
-                            break  # one LoRA at a time for VRAM
                         except Exception as e:
                             print(f"  SDXL LoRA load failed for {char_name}: {e}")
+            elif is_multi_char:
+                char_names = ", ".join(character_loras.keys())
+                print(f"  Multi-character shot ({char_names}): using prompt-only")
 
-            # Generate 8 keyframes with varied seeds for visual diversity
-            num_keyframes = 8
+            # Generate 4 keyframes with SAME seed for consistent composition,
+            # slight prompt variations for subtle movement
+            num_keyframes = 4
+            base_seed = hash(description) % (2**31)
             keyframes = []
             for i in range(num_keyframes):
                 result = pipe(
@@ -302,16 +619,18 @@ class WanAnimator:
                     height=768,
                     num_inference_steps=25,
                     guidance_scale=7.0,
-                    generator=torch.Generator(self._device).manual_seed(42 + i),
+                    generator=torch.Generator(self._device).manual_seed(
+                        base_seed + i
+                    ),
                 )
                 keyframes.append(result.images[0])
                 print(f"  Keyframe {i + 1}/{num_keyframes} generated")
 
-            # Interpolate between keyframes for smooth transitions
-            frames = self._interpolate_keyframes(keyframes, frames_between=6)
+            # Hold each keyframe for multiple frames, with brief cross-fade
+            frames = self._interpolate_keyframes(keyframes, frames_between=2)
 
-            # Assemble to video at 12 fps (~5s per shot)
-            self._frames_to_video(frames, output_path, fps=12)
+            # Assemble to video at 4 fps (~5s per shot, each keyframe visible)
+            self._frames_to_video(frames, output_path, fps=4)
 
             # Unload LoRA adapter to reset for next shot
             if hasattr(pipe.unet, "disable_adapter_layers"):
@@ -358,10 +677,14 @@ class WanAnimator:
         # Try RIFE first, fall back to cross-fade
         rife_model = self._try_load_rife()
 
+        hold_frames = 4  # hold each keyframe for 4 frames before transitioning
         all_frames = []
         for i in range(len(keyframes) - 1):
-            all_frames.append(keyframes[i])
+            # Hold the keyframe steady
+            for _ in range(hold_frames):
+                all_frames.append(keyframes[i])
 
+            # Brief transition to next keyframe
             if rife_model is not None:
                 intermediates = self._rife_interpolate(
                     rife_model, keyframes[i], keyframes[i + 1], frames_between
@@ -372,7 +695,9 @@ class WanAnimator:
                 )
             all_frames.extend(intermediates)
 
-        all_frames.append(keyframes[-1])
+        # Hold the last keyframe
+        for _ in range(hold_frames):
+            all_frames.append(keyframes[-1])
         return all_frames
 
     def _try_load_rife(self):

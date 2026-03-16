@@ -76,6 +76,7 @@ class LoRATrainer:
         character_name: str = None,
         rank: int = None,
         max_steps: int = None,
+        base_model: str = None,
     ) -> Path:
         """
         Train a LoRA adapter for a character.
@@ -86,6 +87,8 @@ class LoRATrainer:
             character_name: Human-readable name (used in prompts).
             rank: LoRA rank override (default 32).
             max_steps: Training step override.
+            base_model: Base model ID (default: animagine-xl-3.1 for SDXL,
+                        use "gsdf/Counterfeit-V3.0" for SD 1.5 AnimateDiff).
 
         Returns:
             Path to saved LoRA weights (.safetensors).
@@ -95,14 +98,19 @@ class LoRATrainer:
 
         rank = rank or self.rank
         max_steps = max_steps or self.max_train_steps
-        output_dir = self.lora_dir / character_id
-        output_dir.mkdir(exist_ok=True)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # ---- Load base model ------------------------------------------------
-        model_id = "cagliostrolab/animagine-xl-3.1"
+        model_id = base_model or "cagliostrolab/animagine-xl-3.1"
         sdxl = _is_sdxl(model_id)
+
+        # SD 1.5 LoRAs go in a separate _sd15 directory
+        if sdxl:
+            output_dir = self.lora_dir / character_id
+        else:
+            output_dir = self.lora_dir / f"{character_id}_sd15"
+        output_dir.mkdir(exist_ok=True)
 
         if sdxl:
             from diffusers import StableDiffusionXLPipeline

@@ -142,6 +142,21 @@ class _AnimatorAgent:
                 shot_index=shot_index,
             )
 
+    def generate_long_video(
+        self,
+        description: str,
+        characters: Dict[str, str],
+        duration_seconds: int = 120,
+        fps: int = 8,
+    ) -> Dict:
+        """Generate a long AnimateDiff video by stitching 16-frame clips."""
+        return self.wan.generate_long_video(
+            description=description,
+            character_loras=characters,
+            duration_seconds=duration_seconds,
+            fps=fps,
+        )
+
 
 class _QualityEvaluator:
     """Facade wrapping the evaluator sub-agents."""
