@@ -334,33 +334,32 @@ class WanAnimator:
 
             pipe = self._animatediff_pipe
 
-            # Unload any previous LoRA
-            try:
-                pipe.unload_lora_weights()
-            except Exception:
-                pass
+            # Unwrap any previous PEFT LoRA from the UNet
+            while hasattr(pipe.unet, "base_model"):
+                try:
+                    pipe.unet = pipe.unet.base_model.model
+                except Exception:
+                    break
 
-            # Load SD 1.5 LoRA for character (look for sd15 variant)
+            # Load SD 1.5 LoRA via PEFT directly (load_lora_weights
+            # silently fails with UNetMotionModel key mismatches)
+            _animatediff_lora_loaded = False
             if character_loras:
                 for char_name, lora_path in character_loras.items():
                     lora_p = Path(lora_path)
-                    # Check for SD 1.5 LoRA alongside the SDXL one
                     sd15_dir = lora_p.parent.parent / f"{lora_p.parent.name}_sd15"
-                    sd15_weights = sd15_dir / "pytorch_lora_weights.safetensors"
-                    sd15_adapter = sd15_dir / "adapter_model.safetensors"
 
-                    lora_to_load = None
-                    if sd15_weights.exists():
-                        lora_to_load = sd15_dir
-                    elif sd15_adapter.exists():
-                        lora_to_load = sd15_dir
-
-                    if lora_to_load is not None:
+                    if (sd15_dir / "adapter_model.safetensors").exists() or (
+                        sd15_dir / "adapter_config.json"
+                    ).exists():
                         try:
-                            pipe.load_lora_weights(
-                                str(lora_to_load),
-                                adapter_name=char_name,
+                            from peft import PeftModel
+
+                            pipe.unet = PeftModel.from_pretrained(
+                                pipe.unet, str(sd15_dir)
                             )
+                            pipe.unet.eval()
+                            _animatediff_lora_loaded = True
                             print(f"  AnimateDiff LoRA loaded for {char_name}")
                             break  # one LoRA at a time
                         except Exception as e:
@@ -394,11 +393,13 @@ class WanAnimator:
             self._frames_to_video(frames, output_path, fps=8)
             print(f"  AnimateDiff clip generated: {output_path}")
 
-            # Cleanup
-            try:
-                pipe.unload_lora_weights()
-            except Exception:
-                pass
+            # Cleanup — unwrap PEFT LoRA if loaded
+            if _animatediff_lora_loaded:
+                while hasattr(pipe.unet, "base_model"):
+                    try:
+                        pipe.unet = pipe.unet.base_model.model
+                    except Exception:
+                        break
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -453,25 +454,31 @@ class WanAnimator:
 
             pipe = self._animatediff_pipe
 
-            # Load LoRA (first character only)
-            try:
-                pipe.unload_lora_weights()
-            except Exception:
-                pass
+            # Load LoRA via PEFT (first character only, once)
+            if clip_idx == 0 and character_loras:
+                # Unwrap any previous PEFT LoRA
+                while hasattr(pipe.unet, "base_model"):
+                    try:
+                        pipe.unet = pipe.unet.base_model.model
+                    except Exception:
+                        break
 
-            if character_loras:
                 for char_name, lora_path in character_loras.items():
                     sd15_dir = (
                         Path(lora_path).parent.parent
                         / f"{Path(lora_path).parent.name}_sd15"
                     )
-                    if (sd15_dir / "pytorch_lora_weights.safetensors").exists() or (
-                        sd15_dir / "adapter_model.safetensors"
+                    if (sd15_dir / "adapter_model.safetensors").exists() or (
+                        sd15_dir / "adapter_config.json"
                     ).exists():
                         try:
-                            pipe.load_lora_weights(
-                                str(sd15_dir), adapter_name=char_name
+                            from peft import PeftModel
+
+                            pipe.unet = PeftModel.from_pretrained(
+                                pipe.unet, str(sd15_dir)
                             )
+                            pipe.unet.eval()
+                            print(f"  LoRA loaded for {char_name}")
                         except Exception:
                             pass
                     break
