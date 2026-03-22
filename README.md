@@ -8,7 +8,10 @@ AnimeLoom coordinates specialized AI agents (character training, video generatio
 
 ## Features
 
-- **Character Identity Preservation** — LoRA fine-tuning (rank 16-32, fp16) locks in each character's visual identity
+- **Character Identity Preservation** — LoRA fine-tuning (rank 16-32, fp16) locks in each character's visual identity via SDXL
+- **Studio-Quality Video Pipeline** — SDXL keyframes + CogVideoX 1.5 animation + GFPGAN face restoration + Real-ESRGAN anime sharpening
+- **Full Body Anime Output** — Head-to-toe character rendering in portrait orientation (512x768 → 480x720)
+- **Interactive Gradio Studio** — Configure settings, preview keyframes, and generate video with a web UI directly in Colab
 - **Multi-Agent Pipeline** — Director orchestrates Character, Animator, and Evaluator agents with a dependency-aware workflow graph
 - **Quality-Gated Output** — shots scoring below 0.85 consistency are automatically regenerated (up to 3 attempts)
 - **Colab Survival Mode** — keepalive every 4 min, auto-checkpoint every 5 min, Google Drive persistence, resume after disconnect
@@ -16,6 +19,37 @@ AnimeLoom coordinates specialized AI agents (character training, video generatio
 - **Detection + Segmentation** — GroundingDINO + SAM isolate characters; CLIP embeddings measure identity similarity
 - **REST API** — FastAPI endpoints for character creation, shot generation, sequence processing, and job tracking
 - **Async Job Queue** — Celery + Redis for background LoRA training and batch video generation
+
+## Video Generation Pipeline
+
+The Colab notebook (`notebooks/AnimeLoom_Colab_Training.ipynb`) runs a 4-phase pipeline:
+
+```
+Phase 1: SDXL + LoRA        → Character-consistent keyframes (512x768 portrait)
+Phase 2: CogVideoX 1.5      → Animate keyframes into motion clips (480x720, int8 quantized)
+Phase 3: GFPGAN + Real-ESRGAN → Face restoration + anime frame sharpening
+Phase 4: Cross-fade stitch   → Blend clips into final video (mp4)
+```
+
+### Key Settings
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `IMAGE_WIDTH` | 512 | SDXL output width (portrait) |
+| `IMAGE_HEIGHT` | 768 | SDXL output height (portrait) |
+| `COGVID_STEPS` | 60 | CogVideoX inference steps |
+| `COGVID_GUIDANCE` | 7.5 | CogVideoX guidance scale |
+| `FPS` | 16 | Output video framerate |
+| `FACE_RESTORE` | True | Enable GFPGAN + Real-ESRGAN post-processing |
+| `DENOISING_STRENGTH` | 0.45 | Img2img strength for keyframe continuity |
+
+### Prompt Engineering for Quality
+
+- **Full body framing**: `"full body, head to toe, facing viewer, front view"`
+- **Studio look**: `"anime screencap, studio quality, sharp lineart, vibrant colors"`
+- **Face stability**: `"symmetrical eyes, stable eye shape, detailed face"`
+- **Motion stability**: `"consistent pose, stable camera angle, slow deliberate blink"`
+- **Negative prompts**: `"3d render, cgi, photorealistic, distorted eyes, blurry hair, mouth blur"`
 
 ## Architecture
 
@@ -76,6 +110,8 @@ animeloom/
 │   ├── colab_survival.py      # Keep-alive + checkpointing
 │   ├── kaggle_trainer.py      # Kaggle P100 training wrapper
 │   └── gcp_setup.sh           # GCP T4 VM provisioning
+├── notebooks/
+│   └── AnimeLoom_Colab_Training.ipynb  # Full Colab pipeline
 ├── warehouse/                  # Runtime asset storage
 │   ├── models/                 # Base model weights
 │   ├── lora/                   # Character LoRA adapters
@@ -93,7 +129,31 @@ animeloom/
 
 ## Quick Start
 
-### 1. Clone & Install
+### Option A: Google Colab (Recommended)
+
+1. Open `notebooks/AnimeLoom_Colab_Training.ipynb` in Google Colab
+2. Set runtime to **A100 GPU** (Runtime → Change runtime type → A100)
+3. Run cells in order:
+   - **Cell 1** — Setup environment, install dependencies, mount Google Drive
+   - **Cell 2** — Upload/download character reference images (10-30 images recommended)
+   - **Cell 3** — Auto-caption images with BLIP
+   - **Cell 4** — Train character LoRA (~15-20 min on A100)
+   - **Cell 5** — Test LoRA with sample images
+   - **Cell 9** — Generate short anime clip (SDXL + CogVideoX 1.5)
+   - **Cell 10** — Generate long anime video (2+ minutes)
+   - **Cell 11** — Launch Gradio Interactive Studio (web UI)
+
+#### Gradio Interactive Studio
+
+Cell 11 launches a web UI with:
+- Character selection (auto-discovers trained LoRAs)
+- SDXL and CogVideoX parameter sliders
+- Editable keyframe and motion prompts
+- **Preview** — generates 1 test keyframe + estimated stats before full run
+- **Generate** — full 4-phase pipeline with progress bar
+- Shareable public URL via `share=True`
+
+### Option B: Local / CLI
 
 ```bash
 git clone https://github.com/JoelJohnsonThomas/AnimeLoom.git
@@ -102,34 +162,39 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-### 2. Run Smoke Test
-
 ```bash
-python main.py --test
+python main.py --test              # smoke test
+python main.py --script script.txt # process a story
+python main.py --api               # start FastAPI server
+python main.py --colab             # Colab survival mode
 ```
 
-Expected output:
-```
-Created character: ffe3da79150c
-Characters in memory: [...]
-Parsed 1 shot(s) from sample script
-Checkpoint save/resume: OK
-All tests passed!
-```
+### Option C: Kaggle (Free 30h/week P100)
 
-### 3. Process a Script
+```python
+from cloud.kaggle_trainer import KaggleTrainer
 
-```bash
-python main.py --script sample_script.txt
+trainer = KaggleTrainer()
+lora_path = trainer.train("Denji", ["/kaggle/input/charsheet/denji.png"], rank=16, max_steps=500)
+trainer.export_lora(lora_path)
 ```
 
-### 4. Start the API Server
+## Training Data Guidelines
 
-```bash
-python main.py --api
-```
+For studio-quality character output:
 
-API available at `http://localhost:8080` — see [API Endpoints](#api-endpoints) below.
+| Image Count | Quality Level | Notes |
+|-------------|---------------|-------|
+| 10-15 | Good for prototyping | Basic identity, may drift on angles |
+| 20-30 | Studio quality | Cover diverse angles, expressions, poses, lighting |
+| 30+ | Diminishing returns | Only needed for very complex character designs |
+
+**Best practices:**
+- Use official anime screenshots (not fan art)
+- Include front, 3/4, and side profile views
+- Mix expressions: neutral, happy, serious, surprised
+- Include full body and close-up shots
+- Avoid heavily compressed or low-resolution images (512px+ on shortest side)
 
 ## Script Format
 
@@ -137,18 +202,17 @@ AnimeLoom uses a simple text-based script format:
 
 ```
 SCENE: Character introduction
-CHAR: Yuki
-A young girl with long blue hair stands in a field of flowers
+CHAR: Denji
+A young boy with blonde messy hair stands on a city street
 
 SCENE: Walking scene
-CHAR: Yuki
+CHAR: Denji
 POSE: walking_pose.mp4
-Yuki walks through the forest, looking around curiously
+Denji walks through the city, looking around
 
-SCENE: Conversation
-CHAR: Yuki
-CHAR: Kenji
-Yuki meets Kenji by the river. They talk about their day.
+SCENE: Rooftop
+CHAR: Denji
+Denji stands on a rooftop at sunset, hair blowing in the wind
 ```
 
 **Directives:**
@@ -175,9 +239,9 @@ Yuki meets Kenji by the river. They talk about their day.
 curl -X POST http://localhost:8080/character/create \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Yuki",
-    "description": "Young girl with long blue hair",
-    "image_paths": ["./test_images/yuki_front.png", "./test_images/yuki_side.png"]
+    "name": "Denji",
+    "description": "Young boy with blonde messy hair and sharp teeth",
+    "image_paths": ["./images/denji_front.png", "./images/denji_side.png"]
   }'
 ```
 
@@ -187,56 +251,25 @@ curl -X POST http://localhost:8080/character/create \
 curl -X POST http://localhost:8080/generate/sequence \
   -H "Content-Type: application/json" \
   -d '{
-    "script": "SCENE: Intro\nCHAR: Yuki\nYuki stands in a flower field",
-    "story_id": "my_story_001"
+    "script": "SCENE: Intro\nCHAR: Denji\nDenji stands on a city street",
+    "story_id": "chainsaw_ep01"
   }'
 ```
 
-## Cloud Deployment
+## Tech Stack
 
-### Google Colab (Recommended for Getting Started)
-
-```python
-# In a Colab notebook cell:
-!git clone https://github.com/yourusername/AnimeLoom.git
-%cd AnimeLoom
-!pip install -r requirements.txt
-
-from main import setup_warehouse
-from director.agent import DirectorAgent
-from cloud.colab_survival import ColabSurvival
-
-warehouse = setup_warehouse()
-director = DirectorAgent(str(warehouse))
-
-# Enable survival mode
-survival = ColabSurvival(director)
-survival.mount_google_drive()
-survival.setup_warehouse_on_drive()
-survival.start()
-
-# Process your script
-result = director.process_story(open("sample_script.txt").read())
-```
-
-### Kaggle (Free 30h/week P100)
-
-```python
-# In a Kaggle notebook cell:
-from cloud.kaggle_trainer import KaggleTrainer
-
-trainer = KaggleTrainer()
-lora_path = trainer.train("Yuki", ["/kaggle/input/charsheet/yuki.png"], rank=16, max_steps=500)
-trainer.export_lora(lora_path)
-```
-
-### Google Cloud ($300 Free Credits)
-
-```bash
-# ~$0.35/hour = 850+ hours from free credits
-chmod +x cloud/gcp_setup.sh
-./cloud/gcp_setup.sh
-```
+| Category | Tools |
+|----------|-------|
+| **Image Generation** | SDXL + PEFT LoRA |
+| **Video Generation** | CogVideoX 1.5 (int8 quantized via optimum-quanto) |
+| **Face Restoration** | GFPGAN v1.4 |
+| **Frame Sharpening** | Real-ESRGAN (x4plus_anime_6B) |
+| **Detection** | GroundingDINO + SAM + CLIP |
+| **Video Processing** | OpenCV, ffmpeg |
+| **Web UI** | Gradio |
+| **API** | FastAPI, Uvicorn, Pydantic |
+| **Queue** | Celery, Redis |
+| **Infra** | Google Colab, Kaggle, GCP |
 
 ## Budget Breakdown
 
@@ -255,20 +288,24 @@ chmod +x cloud/gcp_setup.sh
 
 3. **Character Training** — For each new character, a LoRA adapter is trained from reference images using PEFT (rank 32, ~1000 steps)
 
-4. **Video Generation** — Each shot is generated via Wan2.2-Animate with character LoRAs loaded. Falls back to PixVerse if primary fails
+4. **Keyframe Generation** — SDXL with character LoRA generates consistent keyframes in portrait orientation (512x768). Img2img with low denoising strength maintains continuity between frames
 
-5. **Quality Evaluation** — Generated shots are scored on character consistency (CLIP cosine similarity), motion fidelity (optical flow), and visual quality (sharpness, colour stability). Shots below 0.85 are regenerated
+5. **Video Animation** — CogVideoX 1.5 animates each keyframe into motion clips (49 frames each). Int8 quantization keeps VRAM under control on A100
 
-6. **Checkpointing** — Every 5 minutes, full state is saved. After a Colab disconnect, resume exactly where you left off
+6. **Post-Processing** — GFPGAN restores facial details, Real-ESRGAN (anime model) sharpens all frames. Cross-fade stitching blends clips together
 
-7. **Assembly** — All passing shots are concatenated via ffmpeg into the final video
+7. **Quality Evaluation** — Generated shots are scored on character consistency (CLIP cosine similarity), motion fidelity (optical flow), and visual quality (sharpness, colour stability). Shots below 0.85 are regenerated
+
+8. **Checkpointing** — Every 5 minutes, full state is saved. After a Colab disconnect, resume exactly where you left off
+
+9. **Assembly** — All passing shots are concatenated via ffmpeg into the final video
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AI_CACHE_ROOT` | `./warehouse` | Root directory for all assets |
-| `GOOGLE_DRIVE_MOUNT` | `/content/drive/MyDrive/anime_warehouse` | Drive path for Colab persistence |
+| `GOOGLE_DRIVE_MOUNT` | `/content/drive/MyDrive/AniLoom/warehouse` | Drive path for Colab persistence |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery job queue |
 | `PIXVERSE_API_KEY` | — | PixVerse API key (optional fallback) |
 | `API_HOST` | `0.0.0.0` | FastAPI bind host |
@@ -277,9 +314,10 @@ chmod +x cloud/gcp_setup.sh
 ## Requirements
 
 - Python 3.9+
-- CUDA-capable GPU (T4 / P100 / V100 / A100 recommended)
+- CUDA-capable GPU (A100 recommended for CogVideoX 1.5, T4/P100/V100 for training only)
 - ffmpeg (for video assembly)
 - Redis (optional, for Celery job queue)
+- ~20-25 GB VRAM for full video pipeline (CogVideoX 1.5)
 
 ## Contributing
 
