@@ -1,7 +1,7 @@
 """
 Story Decomposer — converts natural language text into anime shot scripts.
 
-Primary:  Gemini 1.5 Flash free tier (1500 req/day)
+Primary:  Gemini 2.5 Flash free tier via google-genai SDK
 Fallback: Rule-based sentence segmentation + keyword-based scene detection
 """
 
@@ -33,16 +33,20 @@ CHAR: <character name(s), comma-separated>
 
 Rules:
 - Each shot should be 4-6 seconds of action
+- One shot per sentence of the story (aim for more shots, not fewer)
 - Include camera direction (close-up, wide shot, pan, etc.)
 - Include lighting and mood keywords
 - Max 2 characters per shot for quality
 - Use anime-specific visual language (sakuga, cel shading, etc.)
 - If no character names are mentioned, invent suitable anime names
+- IMPORTANT: The character name in CHAR must be a person/character, never an object
 - Output ONLY the script, no commentary or markdown fences
 """
 
-    def __init__(self, gemini_api_key: Optional[str] = None):
+    def __init__(self, gemini_api_key: Optional[str] = None,
+                 character_name: Optional[str] = None):
         self._api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
+        self._character_name = character_name
 
     # ------------------------------------------------------------------
     # Public API
@@ -83,34 +87,77 @@ Rules:
     # ------------------------------------------------------------------
 
     def _decompose_via_gemini(self, text: str) -> Optional[str]:
-        """Use Gemini 1.5 Flash to decompose a story."""
+        """Use Gemini 2.5 Flash to decompose a story."""
+        # Try new google-genai SDK first, fall back to legacy SDK
+        result = self._try_genai_new(text)
+        if result:
+            return result
+        result = self._try_genai_legacy(text)
+        if result:
+            return result
+        return None
+
+    def _try_genai_new(self, text: str) -> Optional[str]:
+        """Gemini via the new google-genai SDK (recommended)."""
+        try:
+            from google import genai
+
+            client = genai.Client(api_key=self._api_key)
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"{self._SYSTEM_PROMPT}\n\nStory:\n{text}",
+                config={
+                    "temperature": 0.7,
+                    "max_output_tokens": 2048,
+                },
+            )
+
+            result = response.text.strip()
+            if "SCENE:" in result and "CHAR:" in result:
+                print("  Story decomposed via Gemini 2.5 Flash (new SDK)")
+                return result
+            return None
+
+        except ImportError:
+            return None
+        except Exception as e:
+            print(f"  Gemini (new SDK) failed: {e}")
+            return None
+
+    def _try_genai_legacy(self, text: str) -> Optional[str]:
+        """Gemini via the legacy google-generativeai SDK (fallback)."""
         try:
             import google.generativeai as genai
 
             genai.configure(api_key=self._api_key)
-            model = genai.GenerativeModel("gemini-1.5-flash")
-
-            response = model.generate_content(
-                [
-                    {"role": "user", "parts": [
-                        f"{self._SYSTEM_PROMPT}\n\nStory:\n{text}"
-                    ]},
-                ],
-                generation_config=genai.GenerationConfig(
-                    temperature=0.7,
-                    max_output_tokens=2048,
-                ),
-            )
-
-            result = response.text.strip()
-            # Validate output looks like a script
-            if "SCENE:" in result and "CHAR:" in result:
-                print("  Story decomposed via Gemini Flash")
-                return result
+            # Try current model names in order
+            for model_name in ["gemini-2.5-flash", "gemini-2.0-flash",
+                               "gemini-1.5-flash"]:
+                try:
+                    model = genai.GenerativeModel(model_name)
+                    response = model.generate_content(
+                        [
+                            {"role": "user", "parts": [
+                                f"{self._SYSTEM_PROMPT}\n\nStory:\n{text}"
+                            ]},
+                        ],
+                        generation_config=genai.GenerationConfig(
+                            temperature=0.7,
+                            max_output_tokens=2048,
+                        ),
+                    )
+                    result = response.text.strip()
+                    if "SCENE:" in result and "CHAR:" in result:
+                        print(f"  Story decomposed via {model_name} (legacy SDK)")
+                        return result
+                except Exception:
+                    continue
             return None
 
+        except ImportError:
+            return None
         except Exception as e:
-            print(f"  Gemini decomposition failed: {e}")
+            print(f"  Gemini (legacy SDK) failed: {e}")
             return None
 
     # ------------------------------------------------------------------
@@ -122,23 +169,28 @@ Rules:
         sentences = self._split_sentences(text)
         characters = self._extract_characters(text)
 
-        # Group sentences into scenes (by location keywords or every 2-3 sentences)
-        scenes = self._group_into_scenes(sentences)
+        # If a character name was provided externally, prefer it
+        if self._character_name and self._character_name not in characters:
+            characters.insert(0, self._character_name)
 
+        # Generate one shot per sentence for more shots and longer videos
         lines = []
-        for i, scene_sentences in enumerate(scenes):
-            scene_text = " ".join(scene_sentences)
-            setting = self._infer_setting(scene_text)
-            chars = self._find_characters_in_text(scene_text, characters)
+        for i, sentence in enumerate(sentences):
+            setting = self._infer_setting(sentence)
+            chars = self._find_characters_in_text(sentence, characters)
+
+            # Use provided character name as default instead of generic "Character"
+            if not chars:
+                if self._character_name:
+                    chars = [self._character_name]
+                else:
+                    chars = ["Character"]
 
             lines.append(f"SCENE: {setting}")
-            if chars:
-                lines.append(f"CHAR: {', '.join(chars)}")
-            else:
-                lines.append("CHAR: Character")
+            lines.append(f"CHAR: {', '.join(chars)}")
 
-            # Build anime prompt
-            prompt = self._build_anime_prompt(scene_text)
+            # Build anime prompt — keep scene description separate from visual prompt
+            prompt = self._build_anime_prompt(sentence)
             lines.append(prompt)
             lines.append("")  # blank line between scenes
 
@@ -161,7 +213,9 @@ Rules:
             "She", "Her", "His", "Him", "But", "And", "For", "With",
             "From", "Into", "Through", "After", "Before", "When", "Where",
             "While", "During", "About", "Each", "Every", "Some", "Many",
-            "Scene", "Shot", "Camera",
+            "Scene", "Shot", "Camera", "Petals", "Wind", "River", "Bridge",
+            "Forest", "Cherry", "Blossom", "Sunset", "Night", "Morning",
+            "Light", "Dark", "Rain", "Snow", "Fire", "Water", "Sky",
         }
 
         from collections import Counter
@@ -174,31 +228,11 @@ Rules:
         return characters[:5]  # cap at 5 characters
 
     def _group_into_scenes(self, sentences: List[str]) -> List[List[str]]:
-        """Group sentences into scenes based on location changes or batching."""
+        """Group sentences into scenes — one sentence per scene for more shots."""
         if not sentences:
             return []
-
-        scene_break_keywords = [
-            "meanwhile", "later", "suddenly", "elsewhere",
-            "at the", "in the", "inside", "outside", "back at",
-            "the next", "that night", "that morning",
-        ]
-
-        scenes = [[]]
-        for sent in sentences:
-            lower = sent.lower()
-            is_break = any(kw in lower for kw in scene_break_keywords)
-
-            if is_break and scenes[-1]:
-                scenes.append([])
-
-            scenes[-1].append(sent)
-
-            # Also break if scene is getting long (3+ sentences)
-            if len(scenes[-1]) >= 3 and sent != sentences[-1]:
-                scenes.append([])
-
-        return [s for s in scenes if s]
+        # One sentence = one shot for better video coverage
+        return [[s] for s in sentences]
 
     def _infer_setting(self, text: str) -> str:
         """Infer a visual setting description from the scene text."""

@@ -25,5 +25,7 @@ pydantic
 peft>=0.7.0
 controlnet-aux>=0.0.7
 realesrgan>=0.3.0
-basicsr>=1.4.2
+basicsr==1.4.2
+google-genai
 google-generativeai
+ultralytics

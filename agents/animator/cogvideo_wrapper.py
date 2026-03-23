@@ -262,17 +262,46 @@ class CogVideoXAnimator:
     # ------------------------------------------------------------------
 
     def _enhance_prompt(self, description: str) -> str:
-        """Enhance a user prompt for anime-style video generation."""
-        anime_keywords = [
-            "anime style", "high quality animation", "detailed anime art",
-            "vibrant colors", "smooth motion",
-        ]
-        # Only add keywords if not already present
+        """Enhance a user prompt for CogVideoX anime video generation.
+
+        CogVideoX best practices:
+        - Present continuous tense for motion ("is walking", "is running")
+        - Camera direction early in prompt
+        - Face detail keywords early (before 77-token CLIP cutoff)
+        - Explicit temporal cues ("gradually", "slowly")
+        - Avoid static keywords ("standing", "portrait")
+        """
         lower = description.lower()
-        additions = [kw for kw in anime_keywords if kw not in lower]
-        if additions:
-            return f"{description}, {', '.join(additions)}"
-        return description
+
+        # Convert simple present to present continuous for motion verbs
+        motion_verbs = {
+            "walks": "is walking", "runs": "is running",
+            "sits": "is sitting", "stands": "is standing slowly",
+            "looks": "is looking", "turns": "is turning",
+            "moves": "is moving", "falls": "is falling",
+            "flies": "is flying", "jumps": "is jumping",
+            "stops": "is stopping", "smiles": "is smiling",
+        }
+        enhanced = description
+        for simple, continuous in motion_verbs.items():
+            if simple in lower:
+                enhanced = enhanced.replace(simple, continuous)
+                # Only replace lowercase version too
+                enhanced = enhanced.replace(
+                    simple.capitalize(), continuous.capitalize()
+                )
+                break  # only one verb replacement to avoid garbling
+
+        # Add face + motion keywords early (within 77 token CLIP limit)
+        face_motion = "clear detailed face, expressive eyes, smooth fluid motion"
+        style = "anime style, high quality animation, vibrant colors"
+
+        if "face" not in lower:
+            enhanced = f"{enhanced}, {face_motion}"
+        if "anime" not in lower:
+            enhanced = f"{enhanced}, {style}"
+
+        return enhanced
 
     # ------------------------------------------------------------------
     # Helpers
