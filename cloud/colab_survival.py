@@ -141,3 +141,49 @@ class ColabSurvival:
 
         latest_story = story_dirs[0].name
         return self.director.resume_story(latest_story)
+
+    # ------------------------------------------------------------------
+    # Model pre-download helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def download_cogvideox(cache_dir: str = None):
+        """Pre-download CogVideoX-2B to Drive/cache for faster cold starts."""
+        cache = cache_dir or os.getenv("AI_CACHE_ROOT", "./warehouse")
+        try:
+            from diffusers import CogVideoXPipeline
+            print("Downloading CogVideoX-2B (this may take a while)...")
+            CogVideoXPipeline.from_pretrained(
+                "THUDM/CogVideoX-2b",
+                cache_dir=os.path.join(cache, "models"),
+            )
+            print("CogVideoX-2B downloaded successfully")
+        except Exception as e:
+            print(f"CogVideoX download failed: {e}")
+
+    @staticmethod
+    def download_realesrgan(cache_dir: str = None):
+        """Pre-download Real-ESRGAN anime model weights."""
+        cache = cache_dir or os.getenv("AI_CACHE_ROOT", "./warehouse")
+        model_path = os.path.join(cache, "models", "RealESRGAN_x4plus_anime_6B.pth")
+        if os.path.exists(model_path):
+            print("Real-ESRGAN anime model already cached")
+            return
+        try:
+            import urllib.request
+            url = (
+                "https://github.com/xinntao/Real-ESRGAN/releases/download/"
+                "v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth"
+            )
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            print("Downloading Real-ESRGAN anime model...")
+            urllib.request.urlretrieve(url, model_path)
+            print("Real-ESRGAN anime model downloaded successfully")
+        except Exception as e:
+            print(f"Real-ESRGAN download failed: {e}")
+
+    @staticmethod
+    def download_all_models(cache_dir: str = None):
+        """Download all models needed for the text-to-anime pipeline."""
+        ColabSurvival.download_cogvideox(cache_dir)
+        ColabSurvival.download_realesrgan(cache_dir)

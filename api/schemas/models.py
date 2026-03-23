@@ -68,6 +68,26 @@ class SequenceResult(BaseModel):
 
 
 # ------------------------------------------------------------------
+# Text-to-anime generation (Sora-like)
+# ------------------------------------------------------------------
+
+class TextToAnimeRequest(BaseModel):
+    text: str = Field(..., description="Natural-language story or scene description")
+    quality: str = Field("standard", description="Quality preset: draft, standard, high")
+    target_resolution: str = Field("720p", description="Target resolution: 480p, 720p, 1080p")
+    target_fps: int = Field(24, ge=4, le=60, description="Target frames per second")
+    story_id: Optional[str] = Field(None, description="Story ID for resume support")
+
+
+class TextToAnimeResult(BaseModel):
+    story_id: str
+    shots: List[ShotResult]
+    final_video: Optional[str] = None
+    character_count: int = 0
+    generated_script: Optional[str] = None
+
+
+# ------------------------------------------------------------------
 # Job status
 # ------------------------------------------------------------------
 

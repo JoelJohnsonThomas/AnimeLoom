@@ -2,9 +2,11 @@
 Video Generation Wrapper — multi-backend animator.
 
 Priority order:
-  1. Wan2.2 (if available and GPU is large enough)
-  2. SDXL keyframes + LoRA → RIFE / cross-fade interpolation (T4-friendly)
-  3. Placeholder coloured-gradient video (offline / CPU)
+  1. CogVideoX-2B (T4-optimised, 49-frame 480×720 clips)
+  2. Wan2.2 (if available and GPU is large enough)
+  3. AnimateDiff + SD 1.5 (16-frame anime clips)
+  4. SDXL keyframes + LoRA → RIFE / cross-fade interpolation (T4-friendly)
+  5. Placeholder coloured-gradient video (offline / CPU)
 """
 
 import os
@@ -34,6 +36,7 @@ class WanAnimator:
         self._pipeline = None
         self._sdxl_pipe = None
         self._animatediff_pipe = None
+        self._cogvideo = None
         self._load_failed = False
         self._animatediff_load_failed = False
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -117,9 +120,17 @@ class WanAnimator:
         Returns:
             Dict with video_path, metadata.
         """
-        self._load_pipeline()
-
         output_path = self.output_dir / f"shot_{shot_index:04d}_{int(time.time())}.mp4"
+
+        # Priority 1: CogVideoX-2B (best T4 option)
+        cogvx_result = self._generate_cogvideox(
+            description, character_loras, shot_index, num_frames,
+            width, height, guidance_scale, num_inference_steps,
+        )
+        if cogvx_result:
+            return cogvx_result
+
+        self._load_pipeline()
 
         # Load character LoRAs if available
         if character_loras and self._pipeline is not None:
@@ -250,6 +261,42 @@ class WanAnimator:
             character_loras=loras,
             shot_index=0,
         )
+
+    # ------------------------------------------------------------------
+    # CogVideoX-2B (primary T2V backend for T4)
+    # ------------------------------------------------------------------
+
+    def _generate_cogvideox(
+        self,
+        description: str,
+        character_loras: Optional[Dict[str, str]] = None,
+        shot_index: int = 0,
+        num_frames: int = 49,
+        width: int = 720,
+        height: int = 480,
+        guidance_scale: float = 6.0,
+        num_inference_steps: int = 50,
+    ) -> Optional[Dict]:
+        """Try generating via CogVideoX-2B. Returns result dict or None."""
+        try:
+            if self._cogvideo is None:
+                from agents.animator.cogvideo_wrapper import CogVideoXAnimator
+                self._cogvideo = CogVideoXAnimator(str(self.warehouse))
+
+            result = self._cogvideo.generate(
+                description=description,
+                character_loras=character_loras,
+                shot_index=shot_index,
+                num_frames=num_frames,
+                width=width,
+                height=height,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+            )
+            return result
+        except Exception as e:
+            print(f"  CogVideoX not available: {e}")
+            return None
 
     # ------------------------------------------------------------------
     # AnimateDiff (SD 1.5 + motion module — real animation on T4)

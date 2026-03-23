@@ -14,6 +14,7 @@ from api.schemas.models import (
     SequenceResult,
     ShotGenerateRequest,
     ShotResult,
+    TextToAnimeRequest,
 )
 from director.agent import DirectorAgent
 
@@ -80,6 +81,33 @@ def _run_sequence(job_id: str, req: SequenceGenerateRequest):
     try:
         director = _director()
         result = director.process_story(req.script, story_id=job_id)
+        _jobs[job_id].status = "completed"
+        _jobs[job_id].progress = 1.0
+        _jobs[job_id].result = result
+    except Exception as e:
+        _jobs[job_id].status = "failed"
+        _jobs[job_id].error = str(e)
+
+
+# ------------------------------------------------------------------
+# Text-to-anime (Sora-like)
+# ------------------------------------------------------------------
+
+@router.post("/generate/anime", response_model=JobStatus)
+async def generate_anime(req: TextToAnimeRequest, bg: BackgroundTasks):
+    """Generate anime video from a natural-language story description."""
+    job_id = req.story_id or str(uuid.uuid4())
+    _jobs[job_id] = JobStatus(job_id=job_id, status="pending")
+
+    bg.add_task(_run_anime, job_id, req)
+    return _jobs[job_id]
+
+
+def _run_anime(job_id: str, req: TextToAnimeRequest):
+    _jobs[job_id].status = "running"
+    try:
+        director = DirectorAgent(_warehouse, quality=req.quality)
+        result = director.process_text_story(req.text, story_id=job_id)
         _jobs[job_id].status = "completed"
         _jobs[job_id].progress = 1.0
         _jobs[job_id].result = result

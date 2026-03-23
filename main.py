@@ -95,7 +95,11 @@ def main():
         description="AnimeLoom - Anime Character Consistency Engine"
     )
     parser.add_argument("--script", type=str, help="Path to script file")
+    parser.add_argument("--text", type=str, help="Natural-language story prompt (Sora-like)")
     parser.add_argument("--story-id", type=str, help="Story ID to resume")
+    parser.add_argument("--quality", type=str, default="standard",
+                        choices=["draft", "standard", "high"],
+                        help="Quality preset (draft=raw, standard=24fps+upscale, high=strict)")
     parser.add_argument("--test", action="store_true", help="Run smoke test")
     parser.add_argument("--colab", action="store_true", help="Run in Colab survival mode")
     parser.add_argument("--api", action="store_true", help="Start FastAPI server")
@@ -115,7 +119,7 @@ def main():
         return
 
     # --- Director mode ---
-    director = DirectorAgent(str(warehouse))
+    director = DirectorAgent(str(warehouse), quality=args.quality)
 
     # Colab survival
     if args.colab:
@@ -130,6 +134,13 @@ def main():
                 result = director.continue_processing()
                 print(json.dumps(result, indent=2, default=str))
                 return
+
+    # Process text prompt (Sora-like)
+    if args.text:
+        print(f"Generating anime from text prompt (quality={args.quality})...")
+        result = director.process_text_story(args.text, args.story_id)
+        print(json.dumps(result, indent=2, default=str))
+        return
 
     # Process script
     if args.script:

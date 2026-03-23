@@ -266,3 +266,26 @@ class LoRATrainer:
         # Move back to float16 for inference
         unet.to(torch.float16)
         return lora_path
+
+    def train_sd15_lora(
+        self,
+        character_images: List[str],
+        character_id: str,
+        character_name: str = None,
+        rank: int = 16,
+        max_steps: int = 500,
+    ) -> Path:
+        """
+        Convenience method: train an SD 1.5 LoRA for AnimateDiff compatibility.
+
+        Uses Lykon/dreamshaper-8 as base model with lower rank (16) and
+        fewer steps (500) — suitable for Kaggle P100 free tier.
+        """
+        return self.train_character_lora(
+            character_images=character_images,
+            character_id=character_id,
+            character_name=character_name,
+            rank=rank,
+            max_steps=max_steps,
+            base_model="Lykon/dreamshaper-8",
+        )
