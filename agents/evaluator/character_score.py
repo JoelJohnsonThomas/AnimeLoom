@@ -53,7 +53,7 @@ class CharacterConsistencyEvaluator:
         """
         frames = self._extract_frames(video_path, sample_frames)
         if not frames:
-            return 0.9  # default when video can't be read
+            return 0.5  # uncertain — video unreadable, don't assume good
 
         # Load reference embeddings from memory bank
         from director.memory_bank import AssetMemoryBank
@@ -77,7 +77,7 @@ class CharacterConsistencyEvaluator:
                 all_scores.append(np.mean(frame_scores))
 
         if not all_scores:
-            return 0.9  # no reference to compare against
+            return 0.5  # uncertain — no reference to compare against
 
         return float(np.mean(all_scores))
 

@@ -2,9 +2,9 @@
 Video Generation Wrapper — multi-backend animator.
 
 Priority order:
-  1. CogVideoX-2B (T4-optimised, 49-frame 480×720 clips)
-  2. Wan2.2 (if available and GPU is large enough)
-  3. AnimateDiff + SD 1.5 (16-frame anime clips)
+  1. Wan2.2 (14B on A100, 5B on T4)
+  2. AnimateDiff T2V + SD 1.5 + IP-Adapter (character-focused anime clips)
+  3. CogVideoX-2B (fallback T2V)
   4. SDXL keyframes + LoRA → RIFE / cross-fade interpolation (T4-friendly)
   5. Placeholder coloured-gradient video (offline / CPU)
 """
@@ -45,10 +45,12 @@ class WanAnimator:
     # Model loading
     # ------------------------------------------------------------------
 
-    # Wan2.2 model variants (smallest first for T4 compatibility)
+    # Wan2.2 model variants — largest first for best quality (A100),
+    # falls back to smaller variants on lower VRAM GPUs.
     _WAN_MODELS = [
-        ("Wan-AI/Wan2.2-TI2V-5B", "wan2.2-ti2v-5b"),     # 5B — fits on T4
-        ("Wan-AI/Wan2.2-T2V-A14B", "wan2.2-t2v-a14b"),    # 14B — needs A100
+        ("Wan-AI/Wan2.2-T2V-A14B", "wan2.2-t2v-a14b"),    # 14B — best quality, A100
+        ("Wan-AI/Wan2.2-TI2V-5B", "wan2.2-ti2v-5b"),      # 5B  — fits on T4
+        ("Wan-AI/Wan2.1-T2V-1.3B", "wan2.1-t2v-1.3b"),    # 1.3B — lightweight fallback
     ]
 
     def _load_pipeline(self):
@@ -122,17 +124,9 @@ class WanAnimator:
         """
         output_path = self.output_dir / f"shot_{shot_index:04d}_{int(time.time())}.mp4"
 
-        # Priority 1: CogVideoX-2B (best T4 option)
-        cogvx_result = self._generate_cogvideox(
-            description, character_loras, shot_index, num_frames,
-            width, height, guidance_scale, num_inference_steps,
-        )
-        if cogvx_result:
-            return cogvx_result
-
+        # Priority 1: Wan2.2 (14B on A100, 5B on T4 — best native video quality)
         self._load_pipeline()
 
-        # Load character LoRAs if available
         if character_loras and self._pipeline is not None:
             for char_name, lora_path in character_loras.items():
                 if Path(lora_path).exists() and Path(lora_path).stat().st_size > 100:
@@ -155,7 +149,6 @@ class WanAnimator:
                     guidance_scale=guidance_scale,
                     num_inference_steps=num_inference_steps,
                 )
-                # Export frames to video
                 self._frames_to_video(result.frames[0], str(output_path))
 
                 return {
@@ -163,12 +156,12 @@ class WanAnimator:
                     "shot_index": shot_index,
                     "prompt": description,
                     "num_frames": num_frames,
-                    "status": "success",
+                    "status": "wan2.2",
                 }
             except Exception as e:
                 print(f"  Wan2.2 generation error: {e}")
 
-        # Fallback 2: AnimateDiff (SD 1.5 + motion module — real animation)
+        # Priority 2: AnimateDiff T2V + IP-Adapter (character-focused anime)
         animatediff_result = self._generate_animatediff(
             str(output_path), description, character_loras, num_frames
         )
@@ -181,7 +174,15 @@ class WanAnimator:
                 "status": "animatediff",
             }
 
-        # Fallback 3: SDXL keyframes + interpolation
+        # Priority 3: CogVideoX-2B (general-purpose T2V fallback)
+        cogvx_result = self._generate_cogvideox(
+            description, character_loras, shot_index, num_frames,
+            width, height, guidance_scale, num_inference_steps,
+        )
+        if cogvx_result:
+            return cogvx_result
+
+        # Priority 4: SDXL keyframes + interpolation
         sdxl_result = self._generate_sdxl_keyframes(
             str(output_path), description, character_loras, num_frames
         )
@@ -302,21 +303,21 @@ class WanAnimator:
     # AnimateDiff (SD 1.5 + motion module — real animation on T4)
     # ------------------------------------------------------------------
 
-    # SD 1.5 anime base models (tried in order)
+    # SD 1.5 anime base models (tried in order — better anime models first)
     _SD15_MODELS = [
-        "Linaqruf/anything-v3-1",
         "Lykon/dreamshaper-8",
+        "Linaqruf/anything-v3-1",
         "runwayml/stable-diffusion-v1-5",
     ]
 
     def _load_animatediff_pipeline(self):
-        """Lazy-load AnimateDiff pipeline with SD 1.5 anime model + ControlNet."""
+        """Lazy-load AnimateDiff text-to-video pipeline with SD 1.5 anime model."""
         if self._animatediff_pipe is not None or self._animatediff_load_failed:
             return
 
         try:
             from diffusers import (
-                AnimateDiffVideoToVideoPipeline,
+                AnimateDiffPipeline,
                 MotionAdapter,
                 DDIMScheduler,
             )
@@ -333,7 +334,7 @@ class WanAnimator:
             pipe = None
             for model_id in self._SD15_MODELS:
                 try:
-                    pipe = AnimateDiffVideoToVideoPipeline.from_pretrained(
+                    pipe = AnimateDiffPipeline.from_pretrained(
                         model_id,
                         motion_adapter=adapter,
                         torch_dtype=torch.float16,
@@ -357,12 +358,45 @@ class WanAnimator:
             pipe.enable_vae_slicing()
             pipe.to(self._device)
 
+            # Load IP-Adapter for character conditioning (if available)
+            self._ip_adapter_loaded = False
+            try:
+                pipe.load_ip_adapter(
+                    "h94/IP-Adapter",
+                    subfolder="models",
+                    weight_name="ip-adapter_sd15.bin",
+                    cache_dir=str(self.warehouse / "models"),
+                )
+                self._ip_adapter_loaded = True
+                print("  IP-Adapter loaded for character consistency")
+            except Exception as e:
+                print(f"  IP-Adapter not available (optional): {e}")
+
             self._animatediff_pipe = pipe
-            print("  AnimateDiff pipeline ready")
+            print("  AnimateDiff T2V pipeline ready")
 
         except Exception as e:
             print(f"  AnimateDiff not available: {e}")
             self._animatediff_load_failed = True
+
+    def _get_reference_image(
+        self, character_loras: Optional[Dict[str, str]]
+    ) -> Optional[Image.Image]:
+        """Get a reference image for IP-Adapter from the character's multi_views."""
+        if not character_loras:
+            return None
+        try:
+            from director.memory_bank import AssetMemoryBank
+            memory = AssetMemoryBank(str(self.warehouse))
+            for char_name in character_loras:
+                char_data = memory.get_character(char_name)
+                if char_data and char_data.get("multi_views"):
+                    for view_path in char_data["multi_views"]:
+                        if Path(view_path).exists():
+                            return Image.open(view_path).convert("RGB")
+        except Exception:
+            pass
+        return None
 
     def _generate_animatediff(
         self,
@@ -371,9 +405,8 @@ class WanAnimator:
         character_loras: Optional[Dict[str, str]] = None,
         num_frames: int = 16,
         reference_image: Optional[Image.Image] = None,
-        strength: float = 0.45,
     ) -> bool:
-        """Generate animated video clip using AnimateDiff vid2vid + SD 1.5 + LoRA."""
+        """Generate animated video clip using AnimateDiff text-to-video + IP-Adapter."""
         try:
             import gc
 
@@ -421,37 +454,43 @@ class WanAnimator:
 
             negative_prompt = (
                 "low quality, bad anatomy, worst quality, blurry, "
-                "deformed, disfigured, static, ugly"
+                "deformed, disfigured, static, ugly, jpeg artifacts"
             )
 
-            # Generate animated clip (up to 32 frames on A100, 16 on T4)
+            # Scale frames by available VRAM (32 on A100, 16 on T4)
             max_frames = 32 if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_mem > 20e9 else 16
+            gen_frames = min(num_frames, max_frames)
 
-            # Prepare reference image for img2img
-            ref_img = reference_image
-            if ref_img is None:
-                # Create a blank image as fallback (text-only generation)
-                ref_img = Image.new("RGB", (512, 768), (128, 128, 128))
-            ref_img = ref_img.resize((512, 768), Image.LANCZOS)
-
-            # Create static video from keyframe (vid2vid adds motion)
-            input_video = [ref_img] * min(num_frames, max_frames)
-
-            result = pipe(
-                video=input_video,
+            # Build generation kwargs for text-to-video
+            gen_kwargs = dict(
                 prompt=description,
                 negative_prompt=negative_prompt,
-                strength=strength,
+                num_frames=gen_frames,
+                width=512,
+                height=768,
                 num_inference_steps=30,
-                guidance_scale=8.0,
+                guidance_scale=7.5,
                 generator=torch.Generator(self._device).manual_seed(
                     hash(description) % (2**31)
                 ),
             )
 
+            # Use IP-Adapter for character conditioning if available
+            if self._ip_adapter_loaded:
+                ref_img = reference_image or self._get_reference_image(character_loras)
+                if ref_img is not None:
+                    ref_img = ref_img.resize((512, 768), Image.LANCZOS)
+                    pipe.set_ip_adapter_scale(0.6)
+                    gen_kwargs["ip_adapter_image"] = ref_img
+                    print("  IP-Adapter conditioning with character reference image")
+                else:
+                    pipe.set_ip_adapter_scale(0.0)
+
+            result = pipe(**gen_kwargs)
+
             frames = result.frames[0]
             self._frames_to_video(frames, output_path, fps=8)
-            print(f"  AnimateDiff clip generated: {output_path}")
+            print(f"  AnimateDiff T2V clip generated: {output_path} ({len(frames)} frames)")
 
             # Cleanup — unwrap PEFT LoRA if loaded
             if _animatediff_lora_loaded:
@@ -544,11 +583,11 @@ class WanAnimator:
                     break
 
             try:
-                result = pipe(
+                gen_kwargs = dict(
                     prompt=description,
                     negative_prompt=(
                         "low quality, bad anatomy, worst quality, blurry, "
-                        "deformed, static, ugly"
+                        "deformed, static, ugly, jpeg artifacts"
                     ),
                     num_frames=frames_per_clip,
                     width=512,
@@ -557,6 +596,16 @@ class WanAnimator:
                     guidance_scale=7.5,
                     generator=torch.Generator(self._device).manual_seed(seed),
                 )
+
+                # Use IP-Adapter for character conditioning if available
+                if getattr(self, "_ip_adapter_loaded", False):
+                    ref_img = self._get_reference_image(character_loras)
+                    if ref_img is not None:
+                        ref_img = ref_img.resize((512, 768), Image.LANCZOS)
+                        pipe.set_ip_adapter_scale(0.6)
+                        gen_kwargs["ip_adapter_image"] = ref_img
+
+                result = pipe(**gen_kwargs)
                 clip_frames = result.frames[0]
 
                 # Cross-fade overlap with previous clip

@@ -33,7 +33,7 @@ class VisualQualityEvaluator:
         """
         frames = self._extract_frames(video_path, sample_frames)
         if not frames:
-            return 0.9
+            return 0.5  # uncertain — no frames to evaluate
 
         scores: List[float] = []
 

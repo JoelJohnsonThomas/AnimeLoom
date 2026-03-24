@@ -186,6 +186,8 @@ class _PostProcessor:
         self.warehouse = warehouse
         self._upscaler = None
         self._color_grader = None
+        self._motion_trimmer = None
+        self._face_restorer = None
 
     @property
     def upscaler(self):
@@ -201,6 +203,20 @@ class _PostProcessor:
             self._color_grader = AnimeColorGrader()
         return self._color_grader
 
+    @property
+    def motion_trimmer(self):
+        if self._motion_trimmer is None:
+            from agents.postprocess.motion_trim import MotionTrimmer
+            self._motion_trimmer = MotionTrimmer()
+        return self._motion_trimmer
+
+    @property
+    def face_restorer(self):
+        if self._face_restorer is None:
+            from agents.postprocess.face_restore import AnimeFaceRestorer
+            self._face_restorer = AnimeFaceRestorer()
+        return self._face_restorer
+
     def postprocess_video(
         self,
         input_path: str,
@@ -209,13 +225,63 @@ class _PostProcessor:
         spatial_scale: int = 2,
         source_fps: int = 8,
     ) -> str:
-        """Run the full post-processing pipeline on a shot video."""
-        return self.upscaler.upscale_video(
-            input_path, output_path,
-            target_fps=target_fps,
-            spatial_scale=spatial_scale,
-            source_fps=source_fps,
-        )
+        """
+        Run the full post-processing pipeline on a shot video:
+          1. Motion trim (cut static trailing frames)
+          2. Temporal upscale (RIFE: 8fps → 24fps)
+          3. Spatial upscale (Real-ESRGAN: 480p → 720p+)
+          4. Face restore (anime face sharpening)
+          5. Color grade (anime-style colour enhancement)
+        """
+        frames = self.upscaler._read_video_frames(input_path)
+        if not frames:
+            print(f"  PostProcessor: no frames read from {input_path}")
+            return input_path
+
+        print(f"  PostProcessor: {len(frames)} frames @ {source_fps}fps")
+
+        # Step 1: Trim static trailing frames
+        try:
+            trimmed = self.motion_trimmer.trim_static_tail(frames)
+            if len(trimmed) < len(frames):
+                print(f"  Motion trim: {len(frames)} → {len(trimmed)} frames "
+                      f"(cut {len(frames) - len(trimmed)} static frames)")
+            frames = trimmed
+        except Exception as e:
+            print(f"  Motion trim skipped: {e}")
+
+        # Step 2: Temporal upscaling (RIFE)
+        if target_fps > source_fps:
+            multiplier = round(target_fps / source_fps)
+            frames = self.upscaler._temporal_upscale(frames, multiplier)
+            print(f"  Temporal upscale: {len(frames)} frames @ ~{target_fps}fps")
+
+        # Step 3: Spatial upscaling (Real-ESRGAN)
+        if spatial_scale > 1:
+            frames = self.upscaler._spatial_upscale(frames, spatial_scale)
+            if frames:
+                import numpy as np
+                h, w = np.array(frames[0]).shape[:2]
+                print(f"  Spatial upscale: {w}×{h}")
+
+        # Step 4: Face restoration (anime face sharpening)
+        try:
+            frames = self.face_restorer.restore_frames(frames)
+            print(f"  Face restore: applied to {len(frames)} frames")
+        except Exception as e:
+            print(f"  Face restore skipped: {e}")
+
+        # Step 5: Color grading
+        try:
+            frames = self.color_grader.grade_frames(frames)
+            print(f"  Color grade: applied")
+        except Exception as e:
+            print(f"  Color grade skipped: {e}")
+
+        # Write output
+        self.upscaler._write_video(frames, output_path, fps=target_fps)
+        print(f"  PostProcessor complete: {output_path}")
+        return output_path
 
 
 class _QualityEvaluator:
@@ -248,18 +314,27 @@ class _QualityEvaluator:
             self._visual_eval = VisualQualityEvaluator(self.warehouse)
         return self._visual_eval
 
-    def evaluate_shot(self, video_path: str, characters: List[str]) -> float:
+    def evaluate_shot(
+        self, video_path: str, characters: List[str],
+        pose_ref: Optional[str] = None,
+    ) -> float:
         """Aggregate quality score (0-1) for a shot."""
         scores = []
         try:
             scores.append(self.character.evaluate(video_path, characters))
         except Exception:
-            scores.append(0.9)  # default if evaluator not ready
+            scores.append(0.5)  # uncertain — don't assume good
         try:
             scores.append(self.visual.evaluate(video_path))
         except Exception:
-            scores.append(0.9)
-        return sum(scores) / len(scores) if scores else 0.9
+            scores.append(0.5)
+        # Include motion evaluation (detects static/wobbling output)
+        if pose_ref:
+            try:
+                scores.append(self.motion.evaluate(video_path, pose_ref))
+            except Exception:
+                scores.append(0.5)
+        return sum(scores) / len(scores) if scores else 0.5
 
     def get_feedback(self, result: Dict) -> Dict:
         """Return structured feedback for regeneration."""
@@ -282,7 +357,7 @@ class DirectorAgent:
 
     CHECKPOINT_INTERVAL = 300  # seconds (5 min)
     QUALITY_THRESHOLD = 0.70  # raised from 0.65 with better generation backends
-    MAX_REGEN_ATTEMPTS = 1
+    MAX_REGEN_ATTEMPTS = 2
 
     # Quality presets: (target_fps, spatial_scale, source_fps)
     QUALITY_PRESETS = {
@@ -486,6 +561,7 @@ class DirectorAgent:
         result["quality_score"] = self.agents["evaluator"].evaluate_shot(
             result.get("video_path", ""),
             shot["characters"],
+            pose_ref=shot.get("pose_ref"),
         )
 
         for char_name in shot["characters"]:

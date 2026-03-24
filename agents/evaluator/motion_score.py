@@ -39,7 +39,7 @@ class MotionFidelityEvaluator:
         ref_frames = self._extract_frames(reference_path, sample_frames)
 
         if not gen_frames or not ref_frames:
-            return 0.9  # default when comparison not possible
+            return 0.5  # uncertain — comparison not possible
 
         # Align frame counts
         min_len = min(len(gen_frames), len(ref_frames))
@@ -51,7 +51,7 @@ class MotionFidelityEvaluator:
         ref_flows = self._compute_optical_flows(ref_frames)
 
         if not gen_flows or not ref_flows:
-            return 0.9
+            return 0.5  # uncertain — flows unavailable
 
         min_flows = min(len(gen_flows), len(ref_flows))
         scores: List[float] = []
@@ -60,7 +60,7 @@ class MotionFidelityEvaluator:
             score = self._flow_similarity(gen_flows[i], ref_flows[i])
             scores.append(score)
 
-        return float(np.mean(scores)) if scores else 0.9
+        return float(np.mean(scores)) if scores else 0.5
 
     def evaluate_pose_keypoints(
         self,
@@ -79,7 +79,7 @@ class MotionFidelityEvaluator:
             ref_poses = conditioner.extract_poses_from_video(reference_path, max_frames=8)
 
             if not gen_poses or not ref_poses:
-                return 0.9
+                return 0.5
 
             min_len = min(len(gen_poses), len(ref_poses))
             scores: List[float] = []
@@ -87,9 +87,9 @@ class MotionFidelityEvaluator:
                 sim = self._image_similarity(gen_poses[i], ref_poses[i])
                 scores.append(sim)
 
-            return float(np.mean(scores)) if scores else 0.9
+            return float(np.mean(scores)) if scores else 0.5
         except Exception:
-            return 0.9
+            return 0.5
 
     # ------------------------------------------------------------------
     # Optical flow
