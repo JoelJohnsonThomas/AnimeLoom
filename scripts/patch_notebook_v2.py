@@ -187,7 +187,15 @@ if use_animatediff:
     # Phase 3b: Load AnimateDiff pipeline with anime base model
     # ----------------------------------------------------------
     print("\\nLoading AnimateDiff + anime base model...")
-    from diffusers import AnimateDiffImg2ImgPipeline, MotionAdapter, DDIMScheduler
+    from diffusers import MotionAdapter, DDIMScheduler
+    try:
+        from diffusers import AnimateDiffImg2ImgPipeline as _AnimPipeClass
+        _use_img2img = True
+        print("  Using AnimateDiffImg2ImgPipeline (image-to-video)")
+    except ImportError:
+        from diffusers import AnimateDiffPipeline as _AnimPipeClass
+        _use_img2img = False
+        print("  AnimateDiffImg2ImgPipeline not available, using AnimateDiffPipeline + vid2vid workaround")
 
     motion_adapter = MotionAdapter.from_pretrained(
         "guoyww/animatediff-motion-adapter-v1-5-3",
@@ -201,7 +209,7 @@ if use_animatediff:
     anim_pipe = None
     for _model_id in _SD15_MODELS:
         try:
-            anim_pipe = AnimateDiffImg2ImgPipeline.from_pretrained(
+            anim_pipe = _AnimPipeClass.from_pretrained(
                 _model_id,
                 motion_adapter=motion_adapter,
                 torch_dtype=torch.float16,
@@ -256,25 +264,44 @@ if use_animatediff:
 
             gen = torch.Generator("cpu").manual_seed(42 + i)
             try:
-                result = anim_pipe(
-                    image=kf_resized,
-                    prompt=motion_prompt,
-                    negative_prompt=ANIM_NEGATIVE,
-                    num_frames=NUM_FRAMES,
-                    strength=DENOISING_STRENGTH,
-                    num_inference_steps=ANIM_STEPS,
-                    guidance_scale=ANIM_GUIDANCE,
-                    generator=gen,
-                )
+                if _use_img2img:
+                    # Img2Img mode: pass keyframe directly
+                    result = anim_pipe(
+                        image=kf_resized,
+                        prompt=motion_prompt,
+                        negative_prompt=ANIM_NEGATIVE,
+                        num_frames=NUM_FRAMES,
+                        strength=DENOISING_STRENGTH,
+                        num_inference_steps=ANIM_STEPS,
+                        guidance_scale=ANIM_GUIDANCE,
+                        generator=gen,
+                    )
+                else:
+                    # Text-to-video mode: generate with prompt, then blend keyframe
+                    result = anim_pipe(
+                        prompt=motion_prompt,
+                        negative_prompt=ANIM_NEGATIVE,
+                        num_frames=NUM_FRAMES,
+                        width=512,
+                        height=768,
+                        num_inference_steps=ANIM_STEPS,
+                        guidance_scale=ANIM_GUIDANCE,
+                        generator=gen,
+                    )
                 clip_frames = result.frames[0]
 
-                # Blend keyframe into first few frames for identity anchoring
-                if len(clip_frames) > 3:
+                # Blend keyframe into frames for identity anchoring
+                # Stronger blend when using text-only mode (no img2img)
+                blend_count = 6 if not _use_img2img else 3
+                if len(clip_frames) > blend_count:
                     try:
                         clip_w, clip_h = clip_frames[0].size if hasattr(clip_frames[0], 'size') else (np.array(clip_frames[0]).shape[1], np.array(clip_frames[0]).shape[0])
                         kf_for_blend = kf_resized.resize((clip_w, clip_h), Image.LANCZOS)
-                        for blend_j in range(min(3, len(clip_frames))):
-                            alpha = 0.3 + (blend_j / 3.0) * 0.7  # start at 30% keyframe, increase to video
+                        for blend_j in range(min(blend_count, len(clip_frames))):
+                            if _use_img2img:
+                                alpha = 0.3 + (blend_j / blend_count) * 0.7
+                            else:
+                                alpha = 0.15 + (blend_j / blend_count) * 0.85
                             frame_pil = clip_frames[blend_j] if isinstance(clip_frames[blend_j], Image.Image) else Image.fromarray(np.array(clip_frames[blend_j]))
                             clip_frames[blend_j] = Image.blend(kf_for_blend, frame_pil, alpha)
                     except Exception as e_blend:
@@ -396,7 +423,7 @@ print(f"Cell 28 length: {len(cell28_src)}")
 # Verify key changes
 checks = [
     ("VIDEO_MODEL selector", "VIDEO_MODEL" in cell28_src),
-    ("AnimateDiff pipeline", "AnimateDiffPipeline" in cell28_src),
+    ("AnimateDiff pipeline", "_AnimPipeClass" in cell28_src),
     ("MotionAdapter", "MotionAdapter" in cell28_src),
     ("SD 1.5 LoRA auto-train", "train_sd15_lora" in cell28_src),
     ("PeftModel LoRA loading", "PeftModel.from_pretrained" in cell28_src),
