@@ -422,15 +422,16 @@ class WanAnimator:
                 "deformed, disfigured, static, ugly"
             )
 
-            # Generate 16-frame animated clip
+            # Generate animated clip (up to 32 frames on A100, 16 on T4)
+            max_frames = 32 if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_mem > 20e9 else 16
             result = pipe(
                 prompt=description,
                 negative_prompt=negative_prompt,
-                num_frames=min(num_frames, 16),
+                num_frames=min(num_frames, max_frames),
                 width=512,
                 height=768,
-                num_inference_steps=25,
-                guidance_scale=7.5,
+                num_inference_steps=30,
+                guidance_scale=8.0,
                 generator=torch.Generator(self._device).manual_seed(
                     hash(description) % (2**31)
                 ),
