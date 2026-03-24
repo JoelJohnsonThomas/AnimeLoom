@@ -316,7 +316,7 @@ class WanAnimator:
 
         try:
             from diffusers import (
-                AnimateDiffImg2ImgPipeline,
+                AnimateDiffVideoToVideoPipeline,
                 MotionAdapter,
                 DDIMScheduler,
             )
@@ -333,7 +333,7 @@ class WanAnimator:
             pipe = None
             for model_id in self._SD15_MODELS:
                 try:
-                    pipe = AnimateDiffImg2ImgPipeline.from_pretrained(
+                    pipe = AnimateDiffVideoToVideoPipeline.from_pretrained(
                         model_id,
                         motion_adapter=adapter,
                         torch_dtype=torch.float16,
@@ -373,7 +373,7 @@ class WanAnimator:
         reference_image: Optional[Image.Image] = None,
         strength: float = 0.45,
     ) -> bool:
-        """Generate animated video clip using AnimateDiff img2img + SD 1.5 + LoRA."""
+        """Generate animated video clip using AnimateDiff vid2vid + SD 1.5 + LoRA."""
         try:
             import gc
 
@@ -434,11 +434,13 @@ class WanAnimator:
                 ref_img = Image.new("RGB", (512, 768), (128, 128, 128))
             ref_img = ref_img.resize((512, 768), Image.LANCZOS)
 
+            # Create static video from keyframe (vid2vid adds motion)
+            input_video = [ref_img] * min(num_frames, max_frames)
+
             result = pipe(
-                image=ref_img,
+                video=input_video,
                 prompt=description,
                 negative_prompt=negative_prompt,
-                num_frames=min(num_frames, max_frames),
                 strength=strength,
                 num_inference_steps=30,
                 guidance_scale=8.0,
