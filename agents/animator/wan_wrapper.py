@@ -416,15 +416,14 @@ class WanAnimator:
 
             pipe = self._animatediff_pipe
 
-            # Unwrap any previous PEFT LoRA from the UNet
-            while hasattr(pipe.unet, "base_model"):
-                try:
-                    pipe.unet = pipe.unet.base_model.model
-                except Exception:
-                    break
+            # Unload any previous LoRA before loading new one
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
 
-            # Load SD 1.5 LoRA via PEFT directly (load_lora_weights
-            # silently fails with UNetMotionModel key mismatches)
+            # Load SD 1.5 LoRA via diffusers native loading
+            # (filters out motion_module keys to preserve motion)
             _animatediff_lora_loaded = False
             if character_loras:
                 for char_name, lora_path in character_loras.items():
@@ -435,15 +434,27 @@ class WanAnimator:
                         sd15_dir / "adapter_config.json"
                     ).exists():
                         try:
-                            from peft import PeftModel
+                            # Use diffusers native LoRA (NOT PEFT) to avoid
+                            # motion_module key mismatch that kills motion.
+                            import safetensors.torch as st
 
-                            pipe.unet = PeftModel.from_pretrained(
-                                pipe.unet, str(sd15_dir)
+                            lora_file = sd15_dir / "adapter_model.safetensors"
+                            if not lora_file.exists():
+                                lora_file = sd15_dir / "adapter_model.bin"
+                            state = (
+                                st.load_file(str(lora_file))
+                                if str(lora_file).endswith(".safetensors")
+                                else torch.load(str(lora_file), map_location="cpu")
                             )
-                            pipe.unet.eval()
-                            _animatediff_lora_loaded = True
-                            print(f"  AnimateDiff LoRA loaded for {char_name}")
-                            break  # one LoRA at a time
+                            spatial = {
+                                k: v for k, v in state.items()
+                                if "motion_module" not in k
+                            }
+                            if spatial:
+                                pipe.load_lora_weights(spatial)
+                                _animatediff_lora_loaded = True
+                                print(f"  AnimateDiff LoRA loaded for {char_name} ({len(spatial)} spatial keys)")
+                            break
                         except Exception as e:
                             print(f"  AnimateDiff LoRA failed for {char_name}: {e}")
                     else:
@@ -492,13 +503,12 @@ class WanAnimator:
             self._frames_to_video(frames, output_path, fps=8)
             print(f"  AnimateDiff T2V clip generated: {output_path} ({len(frames)} frames)")
 
-            # Cleanup — unwrap PEFT LoRA if loaded
+            # Cleanup — unload LoRA weights if loaded
             if _animatediff_lora_loaded:
-                while hasattr(pipe.unet, "base_model"):
-                    try:
-                        pipe.unet = pipe.unet.base_model.model
-                    except Exception:
-                        break
+                try:
+                    pipe.unload_lora_weights()
+                except Exception:
+                    pass
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -553,14 +563,12 @@ class WanAnimator:
 
             pipe = self._animatediff_pipe
 
-            # Load LoRA via PEFT (first character only, once)
+            # Load LoRA (first character only, once)
             if clip_idx == 0 and character_loras:
-                # Unwrap any previous PEFT LoRA
-                while hasattr(pipe.unet, "base_model"):
-                    try:
-                        pipe.unet = pipe.unet.base_model.model
-                    except Exception:
-                        break
+                try:
+                    pipe.unload_lora_weights()
+                except Exception:
+                    pass
 
                 for char_name, lora_path in character_loras.items():
                     sd15_dir = (
@@ -571,13 +579,23 @@ class WanAnimator:
                         sd15_dir / "adapter_config.json"
                     ).exists():
                         try:
-                            from peft import PeftModel
+                            import safetensors.torch as st
 
-                            pipe.unet = PeftModel.from_pretrained(
-                                pipe.unet, str(sd15_dir)
+                            lora_file = sd15_dir / "adapter_model.safetensors"
+                            if not lora_file.exists():
+                                lora_file = sd15_dir / "adapter_model.bin"
+                            state = (
+                                st.load_file(str(lora_file))
+                                if str(lora_file).endswith(".safetensors")
+                                else torch.load(str(lora_file), map_location="cpu")
                             )
-                            pipe.unet.eval()
-                            print(f"  LoRA loaded for {char_name}")
+                            spatial = {
+                                k: v for k, v in state.items()
+                                if "motion_module" not in k
+                            }
+                            if spatial:
+                                pipe.load_lora_weights(spatial)
+                                print(f"  LoRA loaded for {char_name} ({len(spatial)} spatial keys)")
                         except Exception:
                             pass
                     break
