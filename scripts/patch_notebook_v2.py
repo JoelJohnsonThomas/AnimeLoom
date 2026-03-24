@@ -246,9 +246,9 @@ if use_animatediff:
 
         for i, kf_image in enumerate(keyframes):
             shot = shots[i]
-            motion_prompt = f"1girl, anime screencap, {shot['description']}, clear detailed face, expressive eyes, smooth fluid motion, anime style, high quality animation, masterpiece"
-            if CHARACTER_NAME:
-                motion_prompt = f"{CHARACTER_NAME}, " + motion_prompt
+            # Keep prompt under 77 CLIP tokens — important keywords FIRST
+            char_tag = f"{CHARACTER_NAME}, " if CHARACTER_NAME else ""
+            motion_prompt = f"{char_tag}anime, detailed face, expressive eyes, {shot['description']}, smooth motion, masterpiece"
             print(f"  Animating shot {i+1}/{len(keyframes)}: \\"{shot['description'][:50]}...\\"")
 
             # Resize keyframe for AnimateDiff (SD 1.5: 512x768 portrait)
