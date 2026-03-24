@@ -187,7 +187,7 @@ if use_animatediff:
     # Phase 3b: Load AnimateDiff pipeline with anime base model
     # ----------------------------------------------------------
     print("\\nLoading AnimateDiff + anime base model...")
-    from diffusers import AnimateDiffPipeline, MotionAdapter, DDIMScheduler
+    from diffusers import AnimateDiffImg2ImgPipeline, MotionAdapter, DDIMScheduler
 
     motion_adapter = MotionAdapter.from_pretrained(
         "guoyww/animatediff-motion-adapter-v1-5-3",
@@ -201,7 +201,7 @@ if use_animatediff:
     anim_pipe = None
     for _model_id in _SD15_MODELS:
         try:
-            anim_pipe = AnimateDiffPipeline.from_pretrained(
+            anim_pipe = AnimateDiffImg2ImgPipeline.from_pretrained(
                 _model_id,
                 motion_adapter=motion_adapter,
                 torch_dtype=torch.float16,
@@ -257,11 +257,11 @@ if use_animatediff:
             gen = torch.Generator("cpu").manual_seed(42 + i)
             try:
                 result = anim_pipe(
+                    image=kf_resized,
                     prompt=motion_prompt,
                     negative_prompt=ANIM_NEGATIVE,
                     num_frames=NUM_FRAMES,
-                    width=512,
-                    height=768,
+                    strength=DENOISING_STRENGTH,
                     num_inference_steps=ANIM_STEPS,
                     guidance_scale=ANIM_GUIDANCE,
                     generator=gen,

@@ -316,7 +316,7 @@ class WanAnimator:
 
         try:
             from diffusers import (
-                AnimateDiffPipeline,
+                AnimateDiffImg2ImgPipeline,
                 MotionAdapter,
                 DDIMScheduler,
             )
@@ -333,7 +333,7 @@ class WanAnimator:
             pipe = None
             for model_id in self._SD15_MODELS:
                 try:
-                    pipe = AnimateDiffPipeline.from_pretrained(
+                    pipe = AnimateDiffImg2ImgPipeline.from_pretrained(
                         model_id,
                         motion_adapter=adapter,
                         torch_dtype=torch.float16,
@@ -370,8 +370,10 @@ class WanAnimator:
         description: str,
         character_loras: Optional[Dict[str, str]] = None,
         num_frames: int = 16,
+        reference_image: Optional[Image.Image] = None,
+        strength: float = 0.45,
     ) -> bool:
-        """Generate animated video clip using AnimateDiff + SD 1.5 + LoRA."""
+        """Generate animated video clip using AnimateDiff img2img + SD 1.5 + LoRA."""
         try:
             import gc
 
@@ -424,12 +426,20 @@ class WanAnimator:
 
             # Generate animated clip (up to 32 frames on A100, 16 on T4)
             max_frames = 32 if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_mem > 20e9 else 16
+
+            # Prepare reference image for img2img
+            ref_img = reference_image
+            if ref_img is None:
+                # Create a blank image as fallback (text-only generation)
+                ref_img = Image.new("RGB", (512, 768), (128, 128, 128))
+            ref_img = ref_img.resize((512, 768), Image.LANCZOS)
+
             result = pipe(
+                image=ref_img,
                 prompt=description,
                 negative_prompt=negative_prompt,
                 num_frames=min(num_frames, max_frames),
-                width=512,
-                height=768,
+                strength=strength,
                 num_inference_steps=30,
                 guidance_scale=8.0,
                 generator=torch.Generator(self._device).manual_seed(
