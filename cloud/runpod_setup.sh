@@ -32,26 +32,24 @@ echo ""
 echo "Installing dependencies..."
 pip install -q --upgrade pip
 
-# Core ML — DO NOT reinstall torch (base image has the correct version for the pod's CUDA driver)
+# Core ML — DO NOT reinstall torch/torchvision/torchaudio (base image has correct versions)
+# DO NOT install xformers (it pulls incompatible torch versions)
 # Pin diffusers + transformers for torch 2.4.x compatibility
-pip install -q diffusers==0.30.3 transformers==4.44.2 accelerate==0.33.0
+pip install -q "numpy<2.0" diffusers==0.30.3 transformers==4.44.2 accelerate==0.33.0
 pip install -q safetensors peft>=0.7.0 sentencepiece protobuf
 
 # Vision / detection
 pip install -q opencv-python-headless pillow scikit-image scikit-learn
-pip install -q controlnet-aux einops omegaconf ultralytics
+pip install -q controlnet-aux einops omegaconf
 
 # Upscaling / restoration
 pip install -q realesrgan basicsr==1.4.2 gfpgan facexlib
-
-# Quantisation (for CogVideoX int8)
-pip install -q optimum-quanto 2>/dev/null || echo "optimum-quanto optional — skipping"
 
 # Story decomposition (Gemini free tier)
 pip install -q google-genai google-generativeai
 
 # API / job queue (optional — only if running server mode)
-pip install -q fastapi uvicorn celery redis pydantic python-dotenv
+pip install -q fastapi uvicorn pydantic python-dotenv
 
 echo "Dependencies installed."
 
