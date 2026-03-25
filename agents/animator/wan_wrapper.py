@@ -495,7 +495,10 @@ class WanAnimator:
                     gen_kwargs["ip_adapter_image"] = ref_img
                     print("  IP-Adapter conditioning with character reference image")
                 else:
+                    # Pipeline requires ip_adapter_image when adapter is loaded,
+                    # even at scale 0. Pass a blank image to satisfy the check.
                     pipe.set_ip_adapter_scale(0.0)
+                    gen_kwargs["ip_adapter_image"] = Image.new("RGB", (512, 768), (128, 128, 128))
 
             result = pipe(**gen_kwargs)
 
