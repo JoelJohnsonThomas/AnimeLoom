@@ -33,9 +33,9 @@ echo "Installing dependencies..."
 pip install -q --upgrade pip
 
 # Core ML — DO NOT reinstall torch (base image has the correct version for the pod's CUDA driver)
-pip install -q --no-deps diffusers>=0.30.0
-pip install -q transformers>=4.40.0 accelerate safetensors peft>=0.7.0 sentencepiece protobuf
-pip install -q xformers 2>/dev/null || echo "xformers optional — skipping"
+# Pin diffusers + transformers for torch 2.4.x compatibility
+pip install -q diffusers==0.30.3 transformers==4.44.2 accelerate==0.33.0
+pip install -q safetensors peft>=0.7.0 sentencepiece protobuf
 
 # Vision / detection
 pip install -q opencv-python-headless pillow scikit-image scikit-learn
@@ -89,7 +89,7 @@ python3 -c "
 import torch
 if torch.cuda.is_available():
     name = torch.cuda.get_device_name(0)
-    mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+    mem = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f'GPU: {name} ({mem:.1f} GB)')
 else:
     print('WARNING: No GPU detected!')

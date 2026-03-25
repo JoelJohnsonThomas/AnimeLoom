@@ -469,7 +469,7 @@ class WanAnimator:
             )
 
             # Scale frames by available VRAM (32 on A100, 16 on T4)
-            max_frames = 32 if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_mem > 20e9 else 16
+            max_frames = 32 if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 20e9 else 16
             gen_frames = min(num_frames, max_frames)
 
             # Build generation kwargs for text-to-video
@@ -517,6 +517,9 @@ class WanAnimator:
 
         except Exception as e:
             print(f"  AnimateDiff generation failed: {e}")
+            # Fully unload pipeline to free VRAM for fallback models
+            self._animatediff_pipe = None
+            self._ip_adapter_loaded = False
             import gc
             gc.collect()
             if torch.cuda.is_available():

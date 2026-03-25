@@ -41,7 +41,7 @@ def check_gpu():
 
     if torch.cuda.is_available():
         name = torch.cuda.get_device_name(0)
-        mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+        mem = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"GPU: {name} ({mem:.1f} GB)")
         return name, mem
     print("WARNING: No GPU detected!")
