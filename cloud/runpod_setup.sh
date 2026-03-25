@@ -32,9 +32,9 @@ echo ""
 echo "Installing dependencies..."
 pip install -q --upgrade pip
 
-# Core ML
-pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 2>/dev/null || echo "PyTorch already installed via base image"
-pip install -q diffusers>=0.30.0 transformers>=4.40.0 accelerate safetensors peft>=0.7.0
+# Core ML — DO NOT reinstall torch (base image has the correct version for the pod's CUDA driver)
+pip install -q --no-deps diffusers>=0.30.0
+pip install -q transformers>=4.40.0 accelerate safetensors peft>=0.7.0 sentencepiece protobuf
 pip install -q xformers 2>/dev/null || echo "xformers optional — skipping"
 
 # Vision / detection
