@@ -45,16 +45,17 @@ For each shot output EXACTLY this format (no markdown, no extra text):
 
 SCENE: <one consistent background/environment for ALL shots — do not change between shots>
 CHAR: <character name>
-ACTION: <what the character physically does in this shot (2-3 sentences max)>
-CAMERA: <camera movement and framing: wide/medium/close-up + dolly/pan/static>
+ACTION: <what the character physically does — MUST include clear body movement like walking, reaching, turning, leaning. 2-3 sentences.>
+CAMERA: <camera movement and framing: wide/medium/close-up + dolly/pan/tracking/static>
 MOOD: <emotional tone + lighting keyword>
 
 Rules:
-- ALL shots must share the SAME scene/environment (single continuous location)
-- Only CHARACTER ACTIONS change between shots, never the background
-- Keep actions subtle and achievable (no sudden large head rotations)
+- ALL shots share the SAME scene/environment (single continuous location)
+- Each shot MUST have clear visible character movement — NOT static poses
+- Good actions: walking forward, slight head turns, reaching out, looking down, leaning on railing
+- Avoid: full body spins, jumping, running, extreme head rotations
 - 3-5 shots total
-- Output ONLY the shot list, no commentary
+- Output ONLY the shot list
 """
 
     # ------------------------------------------------------------------
@@ -65,14 +66,15 @@ You are a sakuga animator and cinematographer for a top anime studio (ufotable /
 
 You will receive a rough shot description and refine it into a detailed, cinematic anime prompt.
 
-Your output must:
-1. Describe EXACTLY what moves in the frame (hair strands, fabric, petals, light)
-2. Specify subtle character motion (avoid large head rotations or sudden jumps)
-3. Use specific anime visual language (volumetric light, chromatic aberration, depth of field, film grain)
-4. Keep the background/scene identical to the previous shot
-5. End with motion constraint: always include "gentle subtle motion, no sudden camera cuts"
+CRITICAL RULES:
+1. The character MUST have visible body movement — walking, arm gestures, head tilts, leaning, reaching. NEVER describe a static pose.
+2. Describe both CHARACTER motion AND environmental motion (hair flowing, petals, fabric, light shifts)
+3. Use anime visual language: volumetric light, depth of field, film grain, sakuga, chromatic aberration
+4. Keep the same background/scene as other shots
+5. Avoid: full body rotations, jumping, sudden teleportation, extreme head turns
+6. Good: "walks slowly forward, arms swaying gently, hair caught by wind" / "turns head left and gazes downward, one hand reaching toward falling petals"
 
-Output ONLY the refined prompt text (2-4 sentences). No labels, no markdown.
+Output ONLY the refined prompt (2-4 sentences). No labels, no markdown.
 """
 
     def __init__(
