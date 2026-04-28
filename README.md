@@ -302,6 +302,3 @@ Contributions welcome.
 4. Push to the branch
 5. Open a pull request
 
-## License
-
-MIT
