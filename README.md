@@ -68,7 +68,7 @@ Phase 6: Cross-dissolve assembly -> final mp4
 2. Open Jupyter, then `notebooks/AnimeLoom_RunPod.ipynb`
 3. Run cells in order:
    - **Cell 1** — installs pinned deps (torch 2.5.1+cu124, diffusers 0.36, ftfy, gfpgan, facexlib, etc.)
-   - **Cell 2** — downloads a character LoRA from HuggingFace (default: `joelthomas77/animeloom-sakura-haruno`)
+   - **Cell 2** — downloads a character LoRA from HuggingFace (default: `AnimeLoom/sakura-haruno`; also available: `AnimeLoom/denji`, `AnimeLoom/yuki-nagato`)
    - **Cell 2.5** — patches the story decomposer for two-stage Gemini->Claude refinement
    - **Cell 3** — runs the full v2 pipeline (Phase 1 -> 6) and renders the final video
 
