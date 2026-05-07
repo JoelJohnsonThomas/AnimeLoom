@@ -61,7 +61,9 @@ class Wan22AnimateWrapper:
                 cache_dir=str(self.warehouse / "models"),
             )
 
-            if offload_mode == "sequential":
+            if offload_mode == "none":
+                self._pipeline.to(self._device)
+            elif offload_mode == "sequential":
                 self._pipeline.enable_sequential_cpu_offload()
             else:
                 self._pipeline.enable_model_cpu_offload()
