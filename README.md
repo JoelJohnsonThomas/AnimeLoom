@@ -26,6 +26,24 @@ This decoupled design comes from the Wan-Animate paper (arXiv 2509.14055) and is
 
 ---
 
+## Web Studio (new in v2)
+
+A branded Vite + React + TypeScript web UI lives in [`frontend/`](frontend/) and ships alongside the API. It covers character management, script editing, live generation tracking, and result review — wired to the FastAPI backend with TanStack Query polling.
+
+**Stack**: Vite 6 · React 18 · TypeScript · Tailwind v4 · TanStack Query · React Router · Zustand · Lucide icons.
+
+**Deploy modes**:
+
+- **Standalone dev** — `cd frontend && npm install && npm run dev` opens `:5173` and proxies `/api` to FastAPI on `:8080`.
+- **Embedded** — `npm run build:embedded` outputs to `frontend/dist/`; `api/app.py` auto-mounts it at `/ui/` so the entire stack runs on one port.
+- **RunPod** — the notebook ships a **Deploy Web Studio** cell that installs Node, builds the frontend, starts FastAPI, and prints `https://{pod_id}-8080.proxy.runpod.net/ui/`.
+
+Design tokens are wired through a single CSS source ([`frontend/src/styles/tokens.css`](frontend/src/styles/tokens.css)), a global `:focus-visible` ring lands on every interactive element, and brand polish (gradient logo, pink-glow CTAs, sakura petal overlay, celebration spring) is baked in. The historical spec — token CSS, preview HTMLs, original JSX prototypes — is preserved in [`AnimeLoom Design System/`](AnimeLoom%20Design%20System/).
+
+See [`frontend/README.md`](frontend/README.md) for full setup, build modes, and a11y notes.
+
+---
+
 ## Pipeline
 
 ```
@@ -60,6 +78,7 @@ Phase 6: Cross-dissolve assembly -> final mp4
 - **Recommended GPU**: NVIDIA RTX A6000 (48GB VRAM). Each Wan2.2 14B variant peaks around 42-46GB with model CPU offload.
 - **Minimum GPU**: any 24GB+ card with sequential offload (slower; 480x640 max resolution).
 - Python 3.10+, PyTorch 2.5.1 + CUDA 12.4, ffmpeg, Redis (optional, for Celery).
+- **Node.js 20+** (only required if you want to build/run the Web Studio frontend).
 - API keys (optional but recommended): Gemini (free, 1500 req/day at aistudio.google.com/apikey) and Anthropic Claude.
 
 ## Quick Start (RunPod A6000 — primary path)
@@ -71,6 +90,7 @@ Phase 6: Cross-dissolve assembly -> final mp4
    - **Cell 2** — downloads a character LoRA from HuggingFace (default: `AnimeLoom/sakura-haruno`; also available: `AnimeLoom/denji`, `AnimeLoom/yuki-nagato`)
    - **Cell 2.5** — patches the story decomposer for two-stage Gemini->Claude refinement
    - **Cell 3** — runs the full v2 pipeline (Phase 1 -> 6) and renders the final video
+   - **Deploy Web Studio** — installs Node.js, builds the React frontend, starts FastAPI on `:8080`, and prints `https://{pod_id}-8080.proxy.runpod.net/ui/`. Expose HTTP port 8080 in your pod settings first, otherwise the proxy URL will 502.
 
 Configure in Cell 3:
 - `STORY_TEXT` — your one-paragraph story
@@ -89,8 +109,15 @@ chmod +x setup.sh
 ```bash
 python main.py --text "A girl walks through a cherry blossom forest at sunset"
 python main.py --script script.txt --quality high
-python main.py --api      # FastAPI server
+python main.py --api      # FastAPI server (auto-serves /ui/ if frontend/dist/ exists)
 python main.py --test     # smoke test
+```
+
+```bash
+# Web Studio
+cd frontend && npm install
+npm run dev               # http://localhost:5173 (proxies /api -> :8080)
+npm run build:embedded    # then start FastAPI; visit http://localhost:8080/ui/
 ```
 
 ## Architecture
@@ -157,8 +184,16 @@ animeloom/
 │   ├── colab_survival.py            # 4-min keep-alive + 5-min checkpointing
 │   ├── kaggle_trainer.py            # Kaggle P100 trainer
 │   └── gcp_setup.sh                 # GCP T4 VM provisioning
+├── frontend/                        # Vite + React + TypeScript Web Studio (v2)
+│   ├── src/
+│   │   ├── routes/                  # Dashboard, Characters, Script, Generate, Results, Settings, Docs
+│   │   ├── components/              # ui/ (Button, Card, ...) + brand/ (LogoMark, SakuraOverlay)
+│   │   ├── lib/                     # api.ts, types.ts, hooks/, store.ts
+│   │   └── styles/tokens.css        # single source of truth for design tokens
+│   └── README.md
+├── AnimeLoom Design System/         # historical spec — token CSS, preview HTMLs, JSX prototypes
 ├── notebooks/
-│   └── AnimeLoom_RunPod.ipynb       # primary v2 pipeline notebook
+│   └── AnimeLoom_RunPod.ipynb       # primary v2 pipeline notebook (with Deploy Web Studio cell)
 ├── warehouse/                        # runtime asset storage
 │   ├── models/                       # base model weights
 │   ├── lora/                         # character LoRA adapters
@@ -196,6 +231,7 @@ Each phase fully unloads before the next loads, so peak VRAM stays within A6000 
 | NLP | Gemini 2.5 Flash, Claude Sonnet 4.6, rule-based fallback |
 | Post | RIFE, Real-ESRGAN, GFPGAN, OpenCV, ffmpeg |
 | API | FastAPI, Uvicorn, Pydantic |
+| Frontend | Vite 6, React 18, TypeScript, Tailwind v4, TanStack Query, React Router, Zustand, Lucide |
 | Queue | Celery, Redis |
 | Infra | RunPod (primary), Google Colab, Kaggle, GCP |
 
@@ -255,8 +291,9 @@ Best practices: official screencaps over fan art, mix front + 3/4 + side views, 
 | `DELETE` | `/character/{id}` | delete a character |
 | `POST` | `/generate/shot` | generate single shot |
 | `POST` | `/generate/sequence` | generate multi-shot sequence |
-| `POST` | `/generate/text-to-anime` | full text -> anime video |
+| `POST` | `/generate/anime` | full text -> anime video |
 | `GET` | `/job/{job_id}` | check generation job status |
+| `GET` | `/ui/` | Web Studio (when `frontend/dist/` exists) |
 
 ## Environment Variables
 

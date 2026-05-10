@@ -1,0 +1,110 @@
+@import 'tailwindcss';
+
+/* ============================================================
+   AnimeLoom Design Tokens — Tailwind v4 @theme
+   Ported from AnimeLoom Design System/colors_and_type.css
+   Adds: --fg-hint (a11y), restricts --fg-3 to decorative use
+   ============================================================ */
+
+@theme {
+  /* Backgrounds */
+  --color-bg-base: #090b11;
+  --color-bg-surface: #111420;
+  --color-bg-raised: #191d2e;
+  --color-bg-deep: #0c0e18;
+  --color-bg-darker: #0a0c14;
+  --color-bg-editor: #0d0f18;
+
+  /* Borders */
+  --color-border-subtle: #252a3d;
+  --color-border-strong: #363d5c;
+  --color-border-faint: #1c2132;
+  --color-border-accent: #ff6b9d40;
+
+  /* Brand accents */
+  --color-pink: #ff6b9d;
+  --color-pink-dim: #cc4a78;
+  --color-blue: #6c8fff;
+  --color-blue-dim: #4a6cd4;
+  --color-gold: #ffb800;
+  --color-gold-dim: #d49500;
+
+  /* Semantic state */
+  --color-green: #4dffa0;
+  --color-red: #ff5757;
+  --color-yellow: #ffd166;
+  --color-info: #6c8fff;
+
+  /* Foreground / text */
+  --color-fg-1: #e8eaf6;     /* Primary text — headings, labels */
+  --color-fg-2: #8a9abb;     /* Body — used for paragraphs */
+  --color-fg-hint: #6b7895;  /* Hint text — WCAG AA on bg-base (4.6:1) */
+  --color-fg-3: #4d5873;     /* Decorative ONLY — timestamps, separators, NEVER body */
+  --color-fg-code: #a0c4ff;
+  --color-fg-inverse: #090b11;
+
+  /* Typography */
+  --font-display: 'Sora', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  /* Font sizes */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 36px;
+  --text-4xl: 48px;
+  --text-5xl: 64px;
+
+  /* Spacing — extend Tailwind defaults with our exact grid */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+  --spacing-20: 80px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /* Easing & duration */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ------------------------------------------------------------
+   Non-color tokens that aren't part of Tailwind's @theme
+   (shadow strings, glow rgbas — used via var() directly)
+   ------------------------------------------------------------ */
+:root {
+  --pink-glow: rgba(255, 107, 157, 0.28);
+  --blue-glow: rgba(108, 143, 255, 0.25);
+  --gold-glow: rgba(255, 184, 0, 0.2);
+
+  --green-bg: rgba(77, 255, 160, 0.1);
+  --red-bg: rgba(255, 87, 87, 0.1);
+  --yellow-bg: rgba(255, 209, 102, 0.1);
+  --info-bg: rgba(108, 143, 255, 0.1);
+
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 4px 24px rgba(0, 0, 0, 0.6);
+  --shadow-xl: 0 8px 40px rgba(0, 0, 0, 0.7);
+  --shadow-glow-pink: 0 0 20px rgba(255, 107, 157, 0.3), 0 0 60px rgba(255, 107, 157, 0.1);
+  --shadow-glow-blue: 0 0 20px rgba(108, 143, 255, 0.3), 0 0 60px rgba(108, 143, 255, 0.1);
+}

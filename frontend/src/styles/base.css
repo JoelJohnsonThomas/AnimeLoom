@@ -1,0 +1,179 @@
+/* ============================================================
+   Base element styles + a11y primitives
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--color-bg-base);
+  color: var(--color-fg-2);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Selection — pink with high contrast */
+::selection {
+  background: var(--color-pink);
+  color: var(--color-fg-inverse);
+}
+
+/* Scrollbar — themed, slim */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-subtle);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+}
+
+/* ============================================================
+   Global :focus-visible ring
+   Every interactive element gets a visible focus path.
+   Outline + soft glow shadow so it reads on dark backgrounds.
+   ============================================================ */
+*:focus {
+  outline: none;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-pink);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--pink-glow);
+  border-radius: var(--radius-sm);
+  transition: outline-offset 120ms var(--ease-out);
+}
+
+/* For elements that already have a border-radius, inherit it
+   so the focus ring follows the shape. */
+button:focus-visible,
+a:focus-visible,
+[role='button']:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  border-radius: inherit;
+}
+
+/* Heading defaults */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  color: var(--color-fg-1);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin: 0;
+}
+
+h1 {
+  font-size: var(--text-4xl);
+  font-weight: 700;
+}
+h2 {
+  font-size: var(--text-3xl);
+  font-weight: 600;
+}
+h3 {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+}
+h4 {
+  font-family: var(--font-body);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+p {
+  margin: 0;
+  line-height: 1.65;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-fg-code);
+}
+
+a {
+  color: var(--color-blue);
+  text-decoration: none;
+  transition: color 120ms var(--ease-out);
+}
+
+a:hover {
+  color: var(--color-fg-1);
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ============================================================
+   Brand: sakura petal drift animation
+   Used by SakuraOverlay on the Dashboard hero.
+   ============================================================ */
+@keyframes sakura-drift {
+  0% {
+    transform: translateY(-10%) translateX(0) rotate(0deg);
+    opacity: 0;
+  }
+  10%,
+  90% {
+    opacity: 0.45;
+  }
+  100% {
+    transform: translateY(110%) translateX(60px) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+@keyframes celebrate-spring {
+  0% {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
