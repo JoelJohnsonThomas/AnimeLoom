@@ -165,24 +165,14 @@ class PoseConditioner:
     def save_pose_video(
         self, poses: List[Image.Image], output_path: str, fps: int = 8
     ):
-        """Write pose maps to a video file."""
+        """Write pose maps to a video file (H.264 — pose maps feed the model,
+        so compression artifacts here degrade motion guidance)."""
         try:
-            import cv2
+            from agents.postprocess.video_io import write_video_h264
 
             if not poses:
                 return
 
-            first = np.array(poses[0])
-            h, w = first.shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
-
-            for pose in poses:
-                arr = np.array(pose)
-                if arr.ndim == 3 and arr.shape[2] == 3:
-                    arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                writer.write(arr)
-
-            writer.release()
+            write_video_h264(poses, output_path, fps=fps, crf=10)
         except ImportError:
             pass

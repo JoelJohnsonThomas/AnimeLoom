@@ -48,9 +48,18 @@ class Wan22AnimateWrapper:
     # Load / unload
     # ------------------------------------------------------------------
 
-    def load(self, offload_mode: str = "model") -> bool:
+    def load(self, offload_mode: Optional[str] = None) -> bool:
         if self._pipeline is not None:
             return True
+
+        if offload_mode is None:
+            # 40GB+ cards (A100/A6000) hold the 14B fully resident;
+            # offloading there only costs speed.
+            if torch.cuda.is_available():
+                total = torch.cuda.get_device_properties(0).total_memory
+                offload_mode = "none" if total > 38e9 else "model"
+            else:
+                offload_mode = "model"
 
         try:
             from diffusers import WanAnimatePipeline
@@ -213,7 +222,7 @@ class Wan22AnimateWrapper:
         reference_image: Image.Image,
         driving_frames: List[Image.Image],
         prompt: str = "",
-        negative_prompt: str = "",
+        negative_prompt: Optional[str] = None,
         width: int = 480,
         height: int = 832,
         num_inference_steps: int = 20,
@@ -234,6 +243,11 @@ class Wan22AnimateWrapper:
         face_video = self._extract_face_video(driving)
         print(f"    pose_video={len(pose_video)}, face_video={len(face_video)}")
 
+        if negative_prompt is None:
+            from agents.animator.wan_wrapper import WAN_NEGATIVE_PROMPT
+
+            negative_prompt = WAN_NEGATIVE_PROMPT
+
         gen = torch.Generator("cpu").manual_seed(seed)
         try:
             result = self._pipeline(
@@ -241,7 +255,7 @@ class Wan22AnimateWrapper:
                 pose_video=pose_video,
                 face_video=face_video,
                 prompt=prompt or None,
-                negative_prompt=negative_prompt or None,
+                negative_prompt=negative_prompt,
                 height=height,
                 width=width,
                 num_inference_steps=num_inference_steps,

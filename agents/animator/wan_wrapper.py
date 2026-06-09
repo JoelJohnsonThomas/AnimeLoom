@@ -18,6 +18,22 @@ import numpy as np
 import torch
 from PIL import Image
 
+# Official Wan negative prompt — the model was trained against this exact
+# Chinese phrasing; English paraphrases are measurably weaker.
+WAN_NEGATIVE_PROMPT = (
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，"
+    "整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，"
+    "画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，"
+    "静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+)
+
+WAN_LIGHTNING_REPO = "lightx2v/Wan2.2-Lightning"
+# Newest T2V variant first; V1.1 kept as fallback if V2.0 files move.
+WAN_LIGHTNING_VARIANTS = [
+    "Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0",
+    "Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V1.1",
+]
+
 
 class WanAnimator:
     """
@@ -38,6 +54,8 @@ class WanAnimator:
         self._animatediff_pipe = None
         self._cogvideo = None
         self._load_failed = False
+        self._is_moe = False
+        self._lightning_loaded = False
         self._animatediff_load_failed = False
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -47,51 +65,122 @@ class WanAnimator:
 
     # Wan2.2 model variants — largest first for best quality (A100),
     # falls back to smaller variants on lower VRAM GPUs.
+    # Must be the -Diffusers repos: the plain Wan-AI repos use the original
+    # checkpoint layout (no model_index.json) and cannot be loaded by diffusers.
+    # Third element: MoE two-expert architecture (transformer + transformer_2),
+    # which enables the Lightning distill LoRA and guidance_scale_2.
     _WAN_MODELS = [
-        ("Wan-AI/Wan2.2-T2V-A14B", "wan2.2-t2v-a14b"),    # 14B — best quality, A100
-        ("Wan-AI/Wan2.2-TI2V-5B", "wan2.2-ti2v-5b"),      # 5B  — fits on T4
-        ("Wan-AI/Wan2.1-T2V-1.3B", "wan2.1-t2v-1.3b"),    # 1.3B — lightweight fallback
+        ("Wan-AI/Wan2.2-T2V-A14B-Diffusers", "wan2.2-t2v-a14b", True),
+        ("Wan-AI/Wan2.2-TI2V-5B-Diffusers", "wan2.2-ti2v-5b", False),
+        ("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", "wan2.1-t2v-1.3b", False),
     ]
 
+    # Flow-matching shift for UniPC. 5.0 is the documented value for
+    # T2V at 480p; the reference Space uses 3.0 for its I2V pipeline.
+    _FLOW_SHIFT = 5.0
+
     def _load_pipeline(self):
-        """Lazy-load the Wan2.2 pipeline (prefers 5B for T4 compatibility)."""
+        """Lazy-load the Wan2.2 pipeline (bf16, UniPC, Lightning LoRA on MoE)."""
         if self._pipeline is not None or self._load_failed:
             return
 
         try:
-            from diffusers import DiffusionPipeline
+            from diffusers import (
+                AutoencoderKLWan,
+                UniPCMultistepScheduler,
+                WanPipeline,
+            )
 
-            # Check local cache first
-            for _, local_name in self._WAN_MODELS:
-                model_path = self.warehouse / "models" / local_name
-                if model_path.exists():
-                    self._pipeline = DiffusionPipeline.from_pretrained(
-                        str(model_path),
-                        torch_dtype=torch.float16,
-                    )
-                    self._pipeline.to(self._device)
-                    print(f"Wan2.2 loaded from local cache: {local_name}")
-                    return
-
-            # Try HuggingFace hub (smallest model first)
-            for repo_id, _ in self._WAN_MODELS:
+            for repo_id, local_name, is_moe in self._WAN_MODELS:
+                local_path = self.warehouse / "models" / local_name
+                source = str(local_path) if local_path.exists() else repo_id
                 try:
-                    self._pipeline = DiffusionPipeline.from_pretrained(
-                        repo_id,
-                        torch_dtype=torch.float16,
+                    # VAE in fp32 (documented Wan pattern — fp16/bf16 VAE
+                    # decode causes banding), transformer in bf16 (training
+                    # dtype; fp16 overflows and washes out detail).
+                    vae = AutoencoderKLWan.from_pretrained(
+                        source, subfolder="vae", torch_dtype=torch.float32
                     )
-                    self._pipeline.to(self._device)
-                    print(f"Wan2.2 loaded from HuggingFace: {repo_id}")
-                    return
-                except Exception:
+                    pipe = WanPipeline.from_pretrained(
+                        source, vae=vae, torch_dtype=torch.bfloat16
+                    )
+                except Exception as e:
+                    print(f"  Wan load failed for {source}: {type(e).__name__}: {e}")
                     continue
 
-            print("No Wan2.2 model available, falling back to placeholder generation")
+                pipe.scheduler = UniPCMultistepScheduler.from_config(
+                    pipe.scheduler.config, flow_shift=self._FLOW_SHIFT
+                )
+
+                self._is_moe = is_moe
+                self._lightning_loaded = (
+                    self._load_lightning_lora(pipe) if is_moe else False
+                )
+
+                try:
+                    pipe.to(self._device)
+                except torch.cuda.OutOfMemoryError:
+                    print("  Full GPU residency OOM — enabling model CPU offload")
+                    pipe.enable_model_cpu_offload()
+
+                self._pipeline = pipe
+                lightning = " + Lightning" if self._lightning_loaded else ""
+                print(f"Wan loaded: {source}{lightning} (bf16, UniPC shift={self._FLOW_SHIFT})")
+                return
+
+            print("No Wan model available, falling back")
             self._load_failed = True
         except Exception as e:
-            print(f"Wan2.2 not available: {e}")
-            print("Falling back to placeholder generation")
+            print(f"Wan not available: {e}")
             self._load_failed = True
+
+    def _load_lightning_lora(self, pipe) -> bool:
+        """Load the lightx2v Lightning distill LoRA into both MoE experts.
+
+        Lightning collapses inference to 4 steps with no CFG (guidance 1.0),
+        matching the reference HF Space. high_noise targets `transformer`,
+        low_noise targets `transformer_2`.
+        """
+        for variant in WAN_LIGHTNING_VARIANTS:
+            try:
+                pipe.load_lora_weights(
+                    WAN_LIGHTNING_REPO,
+                    weight_name=f"{variant}/high_noise_model.safetensors",
+                    adapter_name="lightning_high",
+                )
+                pipe.load_lora_weights(
+                    WAN_LIGHTNING_REPO,
+                    weight_name=f"{variant}/low_noise_model.safetensors",
+                    adapter_name="lightning_low",
+                    load_into_transformer_2=True,
+                )
+                pipe.set_adapters(
+                    ["lightning_high", "lightning_low"], adapter_weights=[1.0, 1.0]
+                )
+                try:
+                    pipe.fuse_lora(
+                        adapter_names=["lightning_high"],
+                        components=["transformer"],
+                        lora_scale=1.0,
+                    )
+                    pipe.fuse_lora(
+                        adapter_names=["lightning_low"],
+                        components=["transformer_2"],
+                        lora_scale=1.0,
+                    )
+                    pipe.unload_lora_weights()
+                except Exception:
+                    # Fusing transformer_2 unsupported on this diffusers
+                    # version — adapters stay active, which works too.
+                    pass
+                print(f"  Lightning LoRA loaded: {variant}")
+                return True
+            except TypeError as e:
+                print(f"  diffusers too old for transformer_2 LoRA ({e}); upgrade diffusers>=0.35")
+                return False
+            except Exception as e:
+                print(f"  Lightning variant {variant} failed: {e}")
+        return False
 
     # ------------------------------------------------------------------
     # Core generation
@@ -103,21 +192,29 @@ class WanAnimator:
         character_loras: Dict[str, str] = None,
         pose_reference: Optional[str] = None,
         shot_index: int = 0,
-        num_frames: int = 16,
-        width: int = 512,
-        height: int = 512,
-        guidance_scale: float = 7.5,
-        num_inference_steps: int = 30,
+        num_frames: int = 81,
+        width: int = 832,
+        height: int = 480,
+        guidance_scale: Optional[float] = None,
+        num_inference_steps: Optional[int] = None,
+        negative_prompt: str = WAN_NEGATIVE_PROMPT,
+        fps: int = 16,
+        seed: Optional[int] = None,
     ) -> Dict:
         """
         Generate a video shot.
+
+        Defaults match Wan2.2's training distribution: 832×480 (480p
+        landscape bucket), 81 frames at 16 fps (~5 s). guidance/steps are
+        resolved per backend — Lightning: 4 steps cfg 1.0, base: 40 steps
+        cfg 4.0.
 
         Args:
             description: Text prompt describing the shot.
             character_loras: Mapping of char_name -> LoRA weight path.
             pose_reference: Path to pose reference video (optional).
             shot_index: Index of the shot in the story.
-            num_frames: Number of frames to generate.
+            num_frames: Number of frames to generate (Wan wants 4k+1).
 
         Returns:
             Dict with video_path, metadata.
@@ -134,28 +231,53 @@ class WanAnimator:
                         self._pipeline.load_lora_weights(
                             str(Path(lora_path).parent),
                             weight_name=Path(lora_path).name,
+                            adapter_name=f"char_{char_name}",
                         )
                         print(f"  LoRA loaded for {char_name}")
                     except Exception as e:
-                        print(f"  Failed to load LoRA for {char_name}: {e}")
+                        # SDXL/SD1.5 character LoRAs cannot load into Wan's
+                        # transformer — expected until Wan LoRAs are trained.
+                        print(f"  Failed to load LoRA for {char_name} (incompatible with Wan?): {e}")
 
         if self._pipeline is not None:
             try:
-                result = self._pipeline(
+                if self._lightning_loaded:
+                    steps = num_inference_steps or 4
+                    cfg = 1.0 if guidance_scale is None else guidance_scale
+                else:
+                    steps = num_inference_steps or 40
+                    cfg = 4.0 if guidance_scale is None else guidance_scale
+
+                generator = torch.Generator("cpu").manual_seed(
+                    seed if seed is not None else hash(description) % (2**31)
+                )
+                call_kwargs = dict(
                     prompt=description,
+                    negative_prompt=negative_prompt,
                     num_frames=num_frames,
                     width=width,
                     height=height,
-                    guidance_scale=guidance_scale,
-                    num_inference_steps=num_inference_steps,
+                    guidance_scale=cfg,
+                    num_inference_steps=steps,
+                    generator=generator,
                 )
-                self._frames_to_video(result.frames[0], str(output_path))
+                if self._is_moe:
+                    import inspect
+
+                    sig = inspect.signature(self._pipeline.__call__)
+                    if "guidance_scale_2" in sig.parameters:
+                        # Same cfg on both MoE experts, like the reference Space
+                        call_kwargs["guidance_scale_2"] = cfg
+
+                result = self._pipeline(**call_kwargs)
+                self._frames_to_video(result.frames[0], str(output_path), fps=fps)
 
                 return {
                     "video_path": str(output_path),
                     "shot_index": shot_index,
                     "prompt": description,
                     "num_frames": num_frames,
+                    "fps": fps,
                     "status": "wan2.2",
                 }
             except Exception as e:
@@ -898,26 +1020,15 @@ class WanAnimator:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _frames_to_video(self, frames: list, output_path: str, fps: int = 8):
-        """Write a list of PIL Images to an MP4 file."""
+    def _frames_to_video(self, frames: list, output_path: str, fps: int = 16):
+        """Write a list of PIL Images to an MP4 file (H.264, near-lossless)."""
+        if not frames:
+            return
         try:
-            import cv2
+            from agents.postprocess.video_io import write_video_h264
 
-            if not frames:
-                return
-
-            first = np.array(frames[0])
-            h, w = first.shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
-
-            for frame in frames:
-                arr = np.array(frame)
-                if arr.ndim == 3 and arr.shape[2] == 3:
-                    arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                writer.write(arr)
-
-            writer.release()
+            # crf 10: this is an intermediate that gets re-encoded downstream
+            write_video_h264(frames, output_path, fps=fps, crf=10)
         except ImportError:
             # Fallback: save frames as images
             frame_dir = Path(output_path).with_suffix("")
@@ -930,15 +1041,13 @@ class WanAnimator:
     ):
         """Create a placeholder video with colored frames for testing."""
         try:
-            import cv2
+            from agents.postprocess.video_io import write_video_h264
 
             h, w = 512, 512
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, 8, (w, h))
-
             rng = np.random.default_rng(hash(description) % (2**31))
             base_color = rng.integers(50, 200, size=3)
 
+            frames = []
             for i in range(num_frames):
                 frame = np.full((h, w, 3), base_color, dtype=np.uint8)
                 # Add a gradient to indicate motion
@@ -946,9 +1055,9 @@ class WanAnimator:
                 frame[:, :offset, 1] = np.clip(
                     frame[:, :offset, 1].astype(int) + 50, 0, 255
                 ).astype(np.uint8)
-                writer.write(frame)
+                frames.append(frame)
 
-            writer.release()
+            write_video_h264(frames, output_path, fps=8)
         except ImportError:
             # Just create an empty file
             Path(output_path).write_bytes(b"placeholder_video")

@@ -15,11 +15,17 @@ class AnimeFaceRestorer:
     """
     Detect anime faces and sharpen them using OpenCV operations.
 
+    Disabled by default: filtering smears anime line art, and with the
+    Wan2.2 backend faces come out clean already. Opt in with
+    ANIMELOOM_FACE_RESTORE=1 (or enabled=True) for low-quality fallback
+    backends.
+
     Falls back gracefully if YOLO/ultralytics is unavailable — applies
     whole-frame sharpening instead.
     """
 
-    def __init__(self):
+    def __init__(self, enabled: bool = False):
+        self.enabled = enabled
         self._detector = None
         self._detector_failed = False
 
@@ -36,8 +42,11 @@ class AnimeFaceRestorer:
             face_padding: Fractional padding around detected face bbox.
 
         Returns:
-            List of PIL Images with enhanced faces.
+            List of PIL Images with enhanced faces (unchanged when disabled).
         """
+        if not self.enabled:
+            return frames
+
         detector = self._load_detector()
         restored = []
 
@@ -111,7 +120,11 @@ class AnimeFaceRestorer:
         faces: List[Tuple[int, int, int, int]],
         padding: float = 0.25,
     ) -> Image.Image:
-        """Sharpen detected face regions with bilateral filter + unsharp mask."""
+        """Sharpen detected face regions with an unsharp mask.
+
+        No smoothing filters here: bilateral filtering flattens anime
+        line art and cel shading into mush.
+        """
         try:
             import cv2
 
@@ -128,9 +141,6 @@ class AnimeFaceRestorer:
                 y2 = min(h, y2 + py)
 
                 face_region = frame_arr[y1:y2, x1:x2].copy()
-
-                # Bilateral filter — smooths noise while preserving edges
-                face_region = cv2.bilateralFilter(face_region, 5, 50, 50)
 
                 # Unsharp mask — sharpen fine details (eyes, hair strands)
                 blurred = cv2.GaussianBlur(face_region, (0, 0), 2.0)

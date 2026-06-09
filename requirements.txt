@@ -1,13 +1,18 @@
 torch>=2.0.0
 torchvision
 torchaudio
-diffusers>=0.24.0
-transformers>=4.35.0
+diffusers>=0.35.0   # WanPipeline guidance_scale_2 + load_into_transformer_2 (Lightning MoE LoRA)
+transformers>=4.46.0
 accelerate
 safetensors
 opencv-python
 pillow
 numpy>=1.24.0
+ftfy                # Wan prompt cleaning in diffusers
+imageio>=2.34
+imageio-ffmpeg>=0.5.1
+librosa             # S2V audio loading (lip-sync)
+soundfile
 scikit-image
 scikit-learn
 fastapi
@@ -22,7 +27,7 @@ huggingface-hub
 tqdm
 python-dotenv
 pydantic
-peft>=0.7.0
+peft>=0.13.0        # multi-adapter handling for Lightning LoRA
 controlnet-aux>=0.0.7
 realesrgan>=0.3.0
 basicsr==1.4.2

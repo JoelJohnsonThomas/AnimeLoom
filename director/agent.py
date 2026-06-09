@@ -103,6 +103,7 @@ class _AnimatorAgent:
         self.memory = memory
         self._wan = None
         self._pixverse = None
+        self._s2v = None
 
     @property
     def wan(self):
@@ -110,6 +111,13 @@ class _AnimatorAgent:
             from agents.animator.wan_wrapper import WanAnimator
             self._wan = WanAnimator(self.warehouse)
         return self._wan
+
+    @property
+    def s2v(self):
+        if self._s2v is None:
+            from agents.animator.s2v_wrapper import WanS2VWrapper
+            self._s2v = WanS2VWrapper(self.warehouse)
+        return self._s2v
 
     @property
     def pixverse(self):
@@ -125,8 +133,23 @@ class _AnimatorAgent:
         pose_ref: Optional[str] = None,
         shot_index: int = 0,
         feedback: Optional[Dict] = None,
+        audio_ref: Optional[str] = None,
     ) -> Dict:
-        """Generate a shot video, returning metadata dict with *video_path*."""
+        """Generate a shot video, returning metadata dict with *video_path*.
+
+        Shots with an audio reference route to Wan2.2-S2V (audio-driven
+        lip-sync); any S2V failure falls through to the standard T2V path.
+        """
+        if audio_ref and Path(audio_ref).exists():
+            result = self._generate_s2v_shot(
+                description, characters, shot_index, audio_ref
+            )
+            if result:
+                return result
+            print("  S2V failed, falling back to standard generation")
+        elif audio_ref:
+            print(f"  Audio ref not found ({audio_ref}), using standard generation")
+
         try:
             result = self.wan.generate(
                 description=description,
@@ -141,6 +164,44 @@ class _AnimatorAgent:
                 description=description,
                 shot_index=shot_index,
             )
+
+    def _generate_s2v_shot(
+        self,
+        description: str,
+        characters: Dict[str, str],
+        shot_index: int,
+        audio_ref: str,
+    ) -> Optional[Dict]:
+        """Audio-driven shot via Wan2.2-S2V. Needs a character reference image."""
+        import time as _time
+
+        ref_image = self.wan._get_reference_image(characters)
+        if ref_image is None:
+            print("  S2V: no character reference image available")
+            return None
+
+        frames = self.s2v.generate(
+            reference_image=ref_image,
+            audio_path=audio_ref,
+            prompt=description,
+        )
+        if not frames:
+            return None
+
+        out_dir = Path(self.warehouse) / "outputs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        video_path = str(out_dir / f"shot_{shot_index:04d}_{int(_time.time())}_s2v.mp4")
+        self.wan._frames_to_video(frames, video_path, fps=16)
+
+        return {
+            "video_path": video_path,
+            "shot_index": shot_index,
+            "prompt": description,
+            "num_frames": len(frames),
+            "fps": 16,
+            "audio_ref": audio_ref,
+            "status": "s2v",
+        }
 
     def generate_long_video(
         self,
@@ -214,16 +275,20 @@ class _PostProcessor:
     def face_restorer(self):
         if self._face_restorer is None:
             from agents.postprocess.face_restore import AnimeFaceRestorer
-            self._face_restorer = AnimeFaceRestorer()
+            # Off by default — smears anime line art on Wan2.2 output.
+            self._face_restorer = AnimeFaceRestorer(
+                enabled=os.getenv("ANIMELOOM_FACE_RESTORE", "0") == "1"
+            )
         return self._face_restorer
 
     def postprocess_video(
         self,
         input_path: str,
         output_path: str,
-        target_fps: int = 24,
+        target_fps: int = 32,
         spatial_scale: int = 2,
-        source_fps: int = 8,
+        source_fps: int = 16,
+        skip_motion_trim: bool = False,
     ) -> str:
         """
         Run the full post-processing pipeline on a shot video:
@@ -240,15 +305,18 @@ class _PostProcessor:
 
         print(f"  PostProcessor: {len(frames)} frames @ {source_fps}fps")
 
-        # Step 1: Trim static trailing frames
-        try:
-            trimmed = self.motion_trimmer.trim_static_tail(frames)
-            if len(trimmed) < len(frames):
-                print(f"  Motion trim: {len(frames)} → {len(trimmed)} frames "
-                      f"(cut {len(frames) - len(trimmed)} static frames)")
-            frames = trimmed
-        except Exception as e:
-            print(f"  Motion trim skipped: {e}")
+        # Step 1: Trim static trailing frames (skipped for audio-synced shots)
+        if skip_motion_trim:
+            print("  Motion trim: skipped (audio-synced shot)")
+        else:
+            try:
+                trimmed = self.motion_trimmer.trim_static_tail(frames)
+                if len(trimmed) < len(frames):
+                    print(f"  Motion trim: {len(frames)} → {len(trimmed)} frames "
+                          f"(cut {len(frames) - len(trimmed)} static frames)")
+                frames = trimmed
+            except Exception as e:
+                print(f"  Motion trim skipped: {e}")
 
         # Step 2: Temporal upscaling (RIFE)
         if target_fps > source_fps:
@@ -264,10 +332,13 @@ class _PostProcessor:
                 h, w = np.array(frames[0]).shape[:2]
                 print(f"  Spatial upscale: {w}×{h}")
 
-        # Step 4: Face restoration (anime face sharpening)
+        # Step 4: Face restoration (opt-in via ANIMELOOM_FACE_RESTORE=1)
         try:
-            frames = self.face_restorer.restore_frames(frames)
-            print(f"  Face restore: applied to {len(frames)} frames")
+            if self.face_restorer.enabled:
+                frames = self.face_restorer.restore_frames(frames)
+                print(f"  Face restore: applied to {len(frames)} frames")
+            else:
+                print("  Face restore: skipped (disabled)")
         except Exception as e:
             print(f"  Face restore skipped: {e}")
 
@@ -360,10 +431,12 @@ class DirectorAgent:
     MAX_REGEN_ATTEMPTS = 2
 
     # Quality presets: (target_fps, spatial_scale, source_fps)
+    # Wan2.2 generates natively at 16fps; RIFE doubles to 32fps
+    # (integral multiplier), mirroring the reference Space's 16fps + RIFE.
     QUALITY_PRESETS = {
-        "draft":    (8,  1, 8),   # raw output, no upscaling
-        "standard": (24, 2, 8),   # 24fps, 2× spatial (480p → 960p)
-        "high":     (24, 2, 8),   # same as standard + stricter quality gate
+        "draft":    (16, 1, 16),  # raw output, no upscaling
+        "standard": (32, 2, 16),  # RIFE 2×, 2× spatial (480p → 960p)
+        "high":     (32, 2, 16),  # same as standard + stricter quality gate
     }
 
     def __init__(self, warehouse_path: str = None, quality: str = "standard"):
@@ -485,7 +558,9 @@ class DirectorAgent:
         """Parse a script into individual shot dicts."""
         lines = script.strip().split("\n")
         shots: List[Dict] = []
-        current: Dict = {"characters": [], "description": "", "pose_ref": None}
+        current: Dict = {
+            "characters": [], "description": "", "pose_ref": None, "audio_ref": None,
+        }
 
         for line in lines:
             line = line.strip()
@@ -500,6 +575,7 @@ class DirectorAgent:
                     "characters": [],
                     "description": line[len(tag):].strip(),
                     "pose_ref": None,
+                    "audio_ref": None,
                 }
             elif line.upper().startswith("CHAR:"):
                 name = line[5:].strip()
@@ -509,6 +585,9 @@ class DirectorAgent:
                         current["characters"].append(n)
             elif line.upper().startswith("POSE:"):
                 current["pose_ref"] = line[5:].strip()
+            elif line.upper().startswith("AUDIO:"):
+                # Speech clip driving lip-sync for this shot (Wan2.2-S2V)
+                current["audio_ref"] = line[6:].strip()
             else:
                 sep = " " if current["description"] else ""
                 current["description"] += sep + line
@@ -537,14 +616,18 @@ class DirectorAgent:
             characters=character_loras,
             pose_ref=shot.get("pose_ref"),
             shot_index=shot_index,
+            audio_ref=shot.get("audio_ref"),
         )
 
         # Post-processing: upscale + color grade (skip for placeholders)
         video_path = result.get("video_path", "")
+        is_s2v = result.get("status") == "s2v"
         if video_path and result.get("status") != "placeholder" and self.quality != "draft":
             target_fps, spatial_scale, source_fps = self.QUALITY_PRESETS.get(
                 self.quality, self.QUALITY_PRESETS["standard"]
             )
+            # Backends report their actual output fps (Wan 16, AnimateDiff 8)
+            source_fps = result.get("fps", source_fps)
             pp_path = video_path.replace(".mp4", "_pp.mp4")
             try:
                 result["video_path"] = self._post_processor.postprocess_video(
@@ -552,11 +635,21 @@ class DirectorAgent:
                     target_fps=target_fps,
                     spatial_scale=spatial_scale,
                     source_fps=source_fps,
+                    # Trimming frames would desync lips from the audio track
+                    skip_motion_trim=is_s2v,
                 )
                 result["postprocessed"] = True
             except Exception as e:
                 print(f"  Post-processing failed: {e}, using raw video")
                 result["postprocessed"] = False
+
+        # Re-attach the speech track (post-processing is frames-only)
+        if is_s2v and result.get("audio_ref") and result.get("video_path"):
+            from agents.postprocess.video_io import mux_audio
+
+            muxed = result["video_path"].replace(".mp4", "_audio.mp4")
+            if mux_audio(result["video_path"], result["audio_ref"], muxed):
+                result["video_path"] = muxed
 
         result["quality_score"] = self.agents["evaluator"].evaluate_shot(
             result.get("video_path", ""),
@@ -732,8 +825,15 @@ class DirectorAgent:
             from agents.postprocess.transitions import cross_dissolve
             import cv2
 
+            from agents.postprocess.video_io import get_video_fps, write_video_h264
+
             all_clips_frames = []
-            target_fps = 24 if self.quality != "draft" else 8
+            # Clips arrive already retimed by post-processing — read the
+            # real fps from the first clip instead of assuming.
+            preset_fps = self.QUALITY_PRESETS.get(
+                self.quality, self.QUALITY_PRESETS["standard"]
+            )[0]
+            target_fps = get_video_fps(valid[0]["video_path"], default=preset_fps)
 
             for r in valid:
                 cap = cv2.VideoCapture(r["video_path"])
@@ -756,18 +856,8 @@ class DirectorAgent:
                 for i in range(1, len(all_clips_frames)):
                     merged = cross_dissolve(merged, all_clips_frames[i], overlap)
 
-                # Write merged frames
-                import numpy as np
-                first = np.array(merged[0])
-                h, w = first.shape[:2]
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(final_path, fourcc, target_fps, (w, h))
-                for frame in merged:
-                    arr = np.array(frame)
-                    if arr.ndim == 3 and arr.shape[2] == 3:
-                        arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                    writer.write(arr)
-                writer.release()
+                # Final delivery encode — crf 16 H.264
+                write_video_h264(merged, final_path, fps=target_fps, crf=16)
                 print(f"Final video assembled with transitions: {final_path}")
                 return final_path
 

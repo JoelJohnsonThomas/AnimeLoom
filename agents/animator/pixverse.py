@@ -180,20 +180,17 @@ class PixVerseGenerator:
     def _create_placeholder(self, output_path: str, description: str):
         """Create a placeholder video file for testing."""
         try:
-            import cv2
             import numpy as np
 
-            h, w = 512, 512
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, 8, (w, h))
+            from agents.postprocess.video_io import write_video_h264
 
+            h, w = 512, 512
             rng = np.random.default_rng(hash(description) % (2**31))
             color = rng.integers(30, 180, size=3)
 
-            for i in range(16):
-                frame = np.full((h, w, 3), color, dtype=np.uint8)
-                writer.write(frame)
-
-            writer.release()
+            frames = [
+                np.full((h, w, 3), color, dtype=np.uint8) for _ in range(16)
+            ]
+            write_video_h264(frames, output_path, fps=8)
         except ImportError:
             Path(output_path).write_bytes(b"placeholder")

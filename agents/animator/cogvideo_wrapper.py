@@ -308,25 +308,14 @@ class CogVideoXAnimator:
     # ------------------------------------------------------------------
 
     def _frames_to_video(self, frames: list, output_path: str, fps: int = 8):
-        """Write a list of PIL Images / numpy arrays to an MP4 file."""
+        """Write a list of PIL Images / numpy arrays to an MP4 file (H.264)."""
         try:
-            import cv2
+            from agents.postprocess.video_io import write_video_h264
 
             if not frames:
                 return
 
-            first = np.array(frames[0])
-            h, w = first.shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
-
-            for frame in frames:
-                arr = np.array(frame)
-                if arr.ndim == 3 and arr.shape[2] == 3:
-                    arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                writer.write(arr)
-
-            writer.release()
+            write_video_h264(frames, output_path, fps=fps, crf=10)
         except ImportError:
             frame_dir = Path(output_path).with_suffix("")
             frame_dir.mkdir(exist_ok=True)
